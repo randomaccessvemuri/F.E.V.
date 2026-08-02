@@ -1,0 +1,31 @@
+# Build tree
+/build/
+/cmake-build-*/
+compile_commands.json
+
+# FEV / Make outputs
+*_obf.*
+*_obf
+*_orig.*
+*_orig
+*.fev_step_*.c
+*.fev_step_*.cpp
+*.exe
+*.dll
+*.o
+*.obj
+*.a
+*.lib
+*.pdb
+*.ilk
+*.exp
+fev.log
+*.log
+
+# Editor / OS
+.cache/
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
