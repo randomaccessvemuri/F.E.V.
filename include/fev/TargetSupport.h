@@ -8,13 +8,19 @@
 
 namespace fev {
 
+enum class DriverStyle {
+  Gnu,     ///< argv: compiler [flags…] -o <out> <src>
+  ClangCl  ///< argv: clang-cl [flags…] /Fe:<out> <src>
+};
+
 struct CompileTarget {
-  std::string Id;          // e.g. "host", "mingw-x64"
+  std::string Id;          // e.g. "host", "mingw-x64", "clang-cl-dll"
   std::string Description;
   std::string Triple;      // empty ⇒ native host triple
   std::string Compiler;    // resolved absolute/PATH name when Available
   std::vector<std::string> ExtraFlags;
-  std::string ExeSuffix;   // "" or ".exe"
+  std::string ExeSuffix;   // "" , ".exe", or ".dll"
+  DriverStyle Style = DriverStyle::Gnu;
   bool Available = false;
 };
 

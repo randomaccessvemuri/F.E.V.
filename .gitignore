@@ -8,6 +8,8 @@ compile_commands.json
 *_obf
 *_orig.*
 *_orig
+*_dll.c
+*_dll.cpp
 *.fev_step_*.c
 *.fev_step_*.cpp
 *.exe

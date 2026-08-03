@@ -24,9 +24,16 @@ static cl::OptionCategory FevCategory("fev options");
 
 static cl::opt<std::string>
     OutputPath("o",
-               cl::desc("Obfuscated source output (default: "
-                        "<input_stem>_obf.<ext>)"),
+               cl::desc("Obfuscated source output file (default: "
+                        "<input_stem>_obf.<ext>, or under --outdir)"),
                cl::value_desc("file"), cl::init(""), cl::cat(FevCategory));
+
+static cl::opt<std::string>
+    OutDir("outdir",
+           cl::desc("Directory for rewritten source, step temps, and default "
+                    "binary/DLL outputs (created if missing). When set, -o is "
+                    "treated as a filename under this directory"),
+           cl::value_desc("dir"), cl::init(""), cl::cat(FevCategory));
 
 static cl::list<std::string>
     PassList("passes",
@@ -121,6 +128,13 @@ static cl::opt<bool>
                         "binary (--binary-target)"),
                cl::init(false), cl::cat(FevCategory));
 
+static cl::opt<bool>
+    EmitDll("emit-dll",
+            cl::desc("After rewriting, compile to a Windows DLL (implies "
+                     "--emit-binary). Default target: clang-cl-dll on Windows, "
+                     "mingw-dll elsewhere; override with --binary-target"),
+            cl::init(false), cl::cat(FevCategory));
+
 static cl::opt<std::string>
     BinaryTarget("binary-target",
                  cl::desc("Compile target id (see --list-targets; default: host)"),
@@ -128,8 +142,25 @@ static cl::opt<std::string>
 
 static cl::opt<std::string>
     BinaryOutput("binary-output",
-                 cl::desc("Binary output path (default: <obf_stem>[.exe])"),
+                 cl::desc("Binary/DLL output path (default: <obf_stem>[.exe|.dll])"),
                  cl::value_desc("file"), cl::init(""), cl::cat(FevCategory));
+
+static cl::opt<std::string> DllEntry(
+    "dll-entry",
+    cl::desc("to-dll: name of the renamed former main() entry "
+             "(default _fev_dll_entry)"),
+    cl::value_desc("ident"), cl::init("_fev_dll_entry"), cl::cat(FevCategory));
+
+static cl::opt<bool> DllExport(
+    "dll-export",
+    cl::desc("to-dll: __declspec(dllexport) the entry (default true)"),
+    cl::init(true), cl::cat(FevCategory));
+
+static cl::opt<bool> DllThread(
+    "dll-thread",
+    cl::desc("to-dll: CreateThread from DllMain instead of calling entry "
+             "directly (default true; avoids loader lock)"),
+    cl::init(true), cl::cat(FevCategory));
 
 static cl::opt<std::string> ClangFlags(
     "clang-flags",
@@ -193,10 +224,15 @@ Examples:
         --clang-flags="--target=x86_64-w64-mingw32 -isystem /usr/x86_64-w64-mingw32/include" \
         examples/sample2.c --
   fev --passes=all --emit-binary examples/sample.c --
+  fev --passes=to-dll --emit-dll --binary-target=mingw-dll examples/sample2.c --
+  fev --passes=encrypt-buffers,to-dll --emit-dll --binary-target=clang-cl-dll \\
+        examples/sample2.c --
   fev -v --log-color=always --passes=flatten-cfg examples/sample_cff.c --
 
 Multiple passes (including --passes=all) re-parse between each step so
 AST-based passes like dict-rename see text injected by earlier passes.
+to-dll is opt-in only (not part of --passes=all); run it last after
+passes that inject at main().
 
 --clang-flags is a single string tokenized like a shell command line.
 Flags after '--' are still accepted as rewriter parse flags (merged with
@@ -249,10 +285,43 @@ static std::string defaultObfuscatedPath(StringRef InputPath) {
   return std::string(Out);
 }
 
-/// When compiling for mingw, ensure the rewriter can parse windows.h even if
-/// the user forgot parse flags after '--'.
+/// Resolve final source output path from -o / --outdir / input.
+static std::string resolveOutputPath(StringRef InputPath, StringRef OutOpt,
+                                     StringRef OutDirOpt) {
+  std::string File;
+  if (!OutOpt.empty())
+    File = OutOpt.str();
+  else
+    File = defaultObfuscatedPath(InputPath);
+
+  if (!OutDirOpt.empty()) {
+    // Place under outdir using the filename only (ignore any dir in -o).
+    const std::string Base = sys::path::filename(File).str();
+    SmallString<256> Joined;
+    sys::path::append(Joined, OutDirOpt, Base);
+    File = std::string(Joined.str());
+  }
+  return File;
+}
+
+static bool ensureParentDir(StringRef FilePath) {
+  SmallString<256> Parent(FilePath);
+  sys::path::remove_filename(Parent);
+  if (Parent.empty())
+    return true;
+  if (std::error_code EC = sys::fs::create_directories(Parent)) {
+    fev::logError() << "cannot create output directory '" << Parent.str()
+                    << "': " << EC.message();
+    return false;
+  }
+  return true;
+}
+
+/// When compiling for mingw / DLL targets, ensure the rewriter can parse
+/// windows.h even if the user forgot parse flags after '--'.
 static void maybeAddMingwParseFlags(ClangTool &Tool, StringRef TargetId) {
-  if (TargetId != "mingw-x64")
+  if (TargetId != "mingw-x64" && TargetId != "mingw-dll" &&
+      TargetId != "clang-cl-dll")
     return;
   Tool.appendArgumentsAdjuster(getInsertArgumentAdjuster(
       {"--target=x86_64-w64-mingw32", "-isystem",
@@ -362,21 +431,42 @@ int main(int argc, const char **argv) {
     return 1;
   }
 
-  std::string OutFile = OutputPath;
-  if (OutFile.empty())
-    OutFile = defaultObfuscatedPath(Sources.front());
+  std::string OutFile =
+      resolveOutputPath(Sources.front(), OutputPath, OutDir);
+  if (!ensureParentDir(OutFile))
+    return 1;
 
   auto Targets = fev::discoverCompileTargets();
   fev::CompileTarget *Chosen = nullptr;
-  if (EmitBinary) {
-    Chosen = fev::findCompileTarget(Targets, BinaryTarget);
+
+  const bool WantBinary = EmitBinary || EmitDll;
+  std::string EffectiveTarget = BinaryTarget;
+  if (EmitDll && BinaryTarget.getNumOccurrences() == 0) {
+    // clang-cl /LD needs an MSVC SDK. On Linux (and similar) prefer MinGW
+    // -shared when available; use clang-cl-dll explicitly on Windows/VS hosts.
+#if defined(_WIN32)
+    EffectiveTarget = "clang-cl-dll";
+#else
+    if (fev::CompileTarget *Mw =
+            fev::findCompileTarget(Targets, "mingw-dll");
+        Mw && Mw->Available) {
+      EffectiveTarget = "mingw-dll";
+    } else {
+      EffectiveTarget = "clang-cl-dll";
+    }
+#endif
+    fev::logInfo() << "--emit-dll: using --binary-target=" << EffectiveTarget;
+  }
+
+  if (WantBinary) {
+    Chosen = fev::findCompileTarget(Targets, EffectiveTarget);
     if (!Chosen) {
-      fev::logError() << "unknown --binary-target='" << BinaryTarget
+      fev::logError() << "unknown --binary-target='" << EffectiveTarget
                       << "' (try --list-targets)";
       return 1;
     }
     if (!Chosen->Available) {
-      fev::logError() << "--binary-target='" << BinaryTarget
+      fev::logError() << "--binary-target='" << EffectiveTarget
                       << "' is not available on this system";
       fev::listCompileTargets(errs());
       return 1;
@@ -398,6 +488,9 @@ int main(int argc, const char **argv) {
   Config.ArrayChunkSize = ArrayChunkSize;
   Config.ArraySplitMin = ArraySplitMin;
   Config.NameDictPath = NameDict;
+  Config.DllEntryName = DllEntry;
+  Config.DllExport = DllExport;
+  Config.DllThread = DllThread;
   {
     std::string Mode = ValidateOpt;
     if (const char *Env = std::getenv("FEV_VALIDATE")) {
@@ -432,8 +525,8 @@ int main(int argc, const char **argv) {
     StepTool.appendArgumentsAdjuster(getInsertArgumentAdjuster(
         {"-resource-dir", FEV_CLANG_RESOURCE_DIR},
         ArgumentInsertPosition::BEGIN));
-    if (EmitBinary)
-      maybeAddMingwParseFlags(StepTool, BinaryTarget);
+    if (WantBinary)
+      maybeAddMingwParseFlags(StepTool, EffectiveTarget);
     if (!ExtraClangFlags.empty()) {
       std::vector<std::string> Adjust = ExtraClangFlags;
       StepTool.appendArgumentsAdjuster(
@@ -460,6 +553,8 @@ int main(int argc, const char **argv) {
     const std::string Stem = OutFile.substr(0, OutFile.size() - Ext.size());
     const std::string TmpA = Stem + ".fev_step_a" + Ext;
     const std::string TmpB = Stem + ".fev_step_b" + Ext;
+    if (!ensureParentDir(TmpA) || !ensureParentDir(TmpB))
+      return 1;
     std::string CurrentIn = Sources.front();
     bool UseA = true;
     for (size_t I = 0; I < Pipeline.size(); ++I) {
@@ -472,6 +567,14 @@ int main(int argc, const char **argv) {
       RewriteRC = runOne(std::move(StepConfig), CurrentIn, StepOut);
       if (RewriteRC != 0)
         break;
+      // EndSourceFileAction used to log write failures without failing the
+      // tool run — refuse to continue on a missing step output.
+      if (!llvm::sys::fs::exists(StepOut)) {
+        fev::logError() << "pass '" << Pipeline[I]->name()
+                        << "' did not write '" << StepOut << "'";
+        RewriteRC = 1;
+        break;
+      }
       CurrentIn = StepOut;
       UseA = !UseA;
     }
@@ -484,7 +587,7 @@ int main(int argc, const char **argv) {
     return RewriteRC;
   }
 
-  if (!EmitBinary)
+  if (!WantBinary)
     return 0;
 
   std::string BinOut = BinaryOutput;

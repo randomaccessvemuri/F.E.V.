@@ -61,6 +61,13 @@ struct PassConfig {
   /// Empty → built-in benign word list.
   std::string NameDictPath;
 
+  /// to-dll: renamed entry symbol (default _fev_dll_entry).
+  std::string DllEntryName = "_fev_dll_entry";
+  /// to-dll: mark entry with __declspec(dllexport).
+  bool DllExport = true;
+  /// to-dll: run entry via CreateThread from DllMain (avoids loader lock).
+  bool DllThread = true;
+
   /// Rewrite-time (+ optional runtime) integrity checks for each pass.
   /// Off = none, Warn = log and continue, Strict = fail the pass on mismatch.
   ValidateMode Validate = ValidateMode::Warn;

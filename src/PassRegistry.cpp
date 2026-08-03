@@ -83,10 +83,13 @@ std::vector<Pass *> PassRegistry::resolve(const PassConfig &Config) const {
 
   for (const std::string &Name : Config.EnabledPasses) {
     if (Name == "all") {
-      // dict-bytes before scramble/split (encode plain bytes first).
-      // dict-rename last: scrub _fev_* / injected names after other transforms.
+      // Buffer pipeline (in order):
+      //   scramble-arrays → encrypt-buffers → dict-bytes → array-split
+      // so ChaCha runs on plain/scrambled bytes before dict-bytes rewrites
+      // the initializer. dict-rename last. to-dll is opt-in only.
       Pass *DictRename = nullptr;
       Pass *DictBytes = nullptr;
+      Pass *EncryptBuffers = nullptr;
       for (const auto &P : Passes_) {
         if (P->name() == "dict-rename") {
           DictRename = P.get();
@@ -96,17 +99,29 @@ std::vector<Pass *> PassRegistry::resolve(const PassConfig &Config) const {
           DictBytes = P.get();
           continue;
         }
+        if (P->name() == "encrypt-buffers") {
+          EncryptBuffers = P.get();
+          continue;
+        }
+        if (P->name() == "to-dll")
+          continue;
         pushUnique(P.get());
       }
-      if (DictBytes) {
-        auto InsertAt = Out.begin();
-        for (; InsertAt != Out.end(); ++InsertAt) {
-          const llvm::StringRef N = (*InsertAt)->name();
-          if (N == "array-split" || N == "scramble-arrays")
-            break;
+      // Insert encrypt-buffers then dict-bytes immediately after scramble
+      // (or before array-split if scramble is absent).
+      auto InsertAt = Out.end();
+      for (auto It = Out.begin(); It != Out.end(); ++It) {
+        if ((*It)->name() == "scramble-arrays") {
+          InsertAt = std::next(It);
+          break;
         }
-        Out.insert(InsertAt, DictBytes);
+        if ((*It)->name() == "array-split" && InsertAt == Out.end())
+          InsertAt = It;
       }
+      if (EncryptBuffers)
+        InsertAt = std::next(Out.insert(InsertAt, EncryptBuffers));
+      if (DictBytes)
+        Out.insert(InsertAt, DictBytes);
       pushUnique(DictRename);
       continue;
     }

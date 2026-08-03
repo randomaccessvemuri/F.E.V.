@@ -27,6 +27,7 @@ FILE        ?=
 PASSES      ?= all
 SEED        ?= 0xC0FFEE
 OUT         ?=
+OUTDIR      ?=
 BINARY      ?= 0
 TARGET      ?= host
 BINARY_OUT  ?=
@@ -65,9 +66,14 @@ ifneq ($(FILE),)
 _FILE_DIR  := $(dir $(FILE))
 _FILE_BASE := $(basename $(notdir $(FILE)))
 _FILE_EXT  := $(suffix $(FILE))
+_BIN_EXT   := $(if $(filter mingw-x64 mingw-dll clang-cl-dll,$(TARGET)),$(if $(filter mingw-dll clang-cl-dll,$(TARGET)),.dll,.exe),)
+ifeq ($(OUTDIR),)
 _OUT_DEF   := $(_FILE_DIR)$(_FILE_BASE)$(SUFFIX)$(_FILE_EXT)
-_BIN_EXT   := $(if $(filter mingw-x64,$(TARGET)),.exe,)
 _BIN_DEF   := $(_FILE_DIR)$(_FILE_BASE)$(SUFFIX)$(_BIN_EXT)
+else
+_OUT_DEF   := $(OUTDIR)/$(_FILE_BASE)$(SUFFIX)$(_FILE_EXT)
+_BIN_DEF   := $(OUTDIR)/$(_FILE_BASE)$(SUFFIX)$(_BIN_EXT)
+endif
 endif
 
 OUT        := $(if $(OUT),$(OUT),$(_OUT_DEF))
@@ -111,13 +117,14 @@ help:
 	@echo "  make FILE=<src> PASSES=none  copy original → <stem>_orig.<ext>"
 	@echo "  make list / list-targets / clean"
 	@echo ""
-	@echo "Knobs: FILE PASSES SEED SUFFIX OUT BINARY TARGET BINARY_OUT"
+	@echo "Knobs: FILE PASSES SEED SUFFIX OUT OUTDIR BINARY TARGET BINARY_OUT"
 	@echo "       CLANG_FLAGS FEV_FLAGS SEQUENTIAL LOG_FILE VALIDATE"
 	@echo ""
 	@echo "  PASSES=all   → sequential pipeline of every pass"
 	@echo "  PASSES=none  → no obfuscation (baseline copy for comparison)"
 	@echo "  PASSES=a,b   → one fev invocation (SEQUENTIAL=1 to pipeline)"
 	@echo "  SUFFIX=_obf  → output stem (default _obf; _orig when PASSES=none)"
+	@echo "  OUTDIR=dir   → write outputs under dir (created if missing)"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make FILE=examples/sample.c BINARY=1"
@@ -125,8 +132,12 @@ help:
 	@echo "  make FILE=examples/sample.c PASSES=all SUFFIX=_obf BINARY=1"
 	@echo "  make FILE=examples/sample2.c PASSES=none SUFFIX=_orig BINARY=1"
 	@echo "  make FILE=examples/sample2.c BINARY=1"
+	@echo "  make FILE=examples/sample2.c PASSES=to-dll BINARY=1 TARGET=mingw-dll SUFFIX=_dll"
+	@echo "  make FILE=examples/sample2.c PASSES=all,to-dll BINARY=1 TARGET=mingw-dll OUTDIR=examples/out"
 	@echo ""
 	@echo "Smoke: make test | test-sample2 | test-cff | test-opaque"
+	@echo "Note: to-dll is opt-in (not in PASSES=all). TARGET=clang-cl-dll needs MSVC SDK;"
+	@echo "      on Linux use TARGET=mingw-dll for --emit-dll-style builds."
 
 configure: $(BUILD_DIR)/CMakeCache.txt
 
@@ -166,11 +177,14 @@ run obfuscate: $(FEV)
 	  if [ -z "$$EFF_CLANG" ]; then \
 	    EFF_CLANG="$(MINGW_FLAGS)"; \
 	  fi; \
-	  case "$$EFF_BINOUT" in \
-	    *.exe) ;; \
-	    *) EFF_BINOUT="$${EFF_BINOUT}.exe" ;; \
-	  esac; \
 	fi; \
+	case "$$EFF_TARGET" in \
+	  mingw-dll|clang-cl-dll) \
+	    case "$$EFF_BINOUT" in *.dll) ;; *) EFF_BINOUT="$${EFF_BINOUT}.dll" ;; esac ;; \
+	  mingw-x64) \
+	    case "$$EFF_BINOUT" in *.exe) ;; *) EFF_BINOUT="$${EFF_BINOUT}.exe" ;; esac ;; \
+	esac; \
+	mkdir -p "$$(dirname "$(OUT)")"; \
 	rm -f "$(OUT)" $$( [ "$(BINARY)" = "1" ] || [ "$(BINARY)" = "yes" ] || [ "$(BINARY)" = "true" ] || [ "$(BINARY)" = "ON" ] && echo "$$EFF_BINOUT" ); \
 	WANT_BIN=0; \
 	case "$(BINARY)" in 1|yes|true|ON) WANT_BIN=1 ;; esac; \
@@ -227,28 +241,39 @@ run obfuscate: $(FEV)
 	  done; \
 	  if [ -n "$$PENDING" ]; then STEPS="$$STEPS $$PENDING"; fi; \
 	  STEPS=$$(echo $$STEPS); \
-	  # dict-bytes before scramble-arrays / array-split (encode plain bytes first). \
-	  STEPS_NO_DB=""; \
-	  HAS_DB=0; \
+	  # Buffer order: scramble → encrypt-buffers → dict-bytes → array-split \
+	  # so ChaCha sees plain/scrambled bytes before dict-bytes. \
+	  STEPS_CORE=""; \
+	  HAS_DB=0; HAS_EB=0; HAS_SC=0; HAS_AS=0; \
 	  for S in $$STEPS; do \
-	    if [ "$$S" = "dict-bytes" ]; then HAS_DB=1; \
-	    else STEPS_NO_DB="$$STEPS_NO_DB $$S"; fi; \
+	    case "$$S" in \
+	      dict-bytes) HAS_DB=1 ;; \
+	      encrypt-buffers) HAS_EB=1 ;; \
+	      scramble-arrays) HAS_SC=1 ;; \
+	      array-split) HAS_AS=1 ;; \
+	      *) STEPS_CORE="$$STEPS_CORE $$S" ;; \
+	    esac; \
 	  done; \
-	  if [ "$$HAS_DB" = "1" ]; then \
-	    STEPS_WITH_DB=""; \
+	  BUF=""; \
+	  if [ "$$HAS_SC" = "1" ]; then BUF="$$BUF scramble-arrays"; fi; \
+	  if [ "$$HAS_EB" = "1" ]; then BUF="$$BUF encrypt-buffers"; fi; \
+	  if [ "$$HAS_DB" = "1" ]; then BUF="$$BUF dict-bytes"; fi; \
+	  if [ "$$HAS_AS" = "1" ]; then BUF="$$BUF array-split"; fi; \
+	  if [ -n "$$BUF" ]; then \
+	    STEPS_WITH_BUF=""; \
 	    INSERTED=0; \
-	    for S in $$STEPS_NO_DB; do \
-	      if [ "$$INSERTED" = "0" ] && { [ "$$S" = "array-split" ] || [ "$$S" = "scramble-arrays" ]; }; then \
-	        STEPS_WITH_DB="$$STEPS_WITH_DB dict-bytes $$S"; \
+	    for S in $$STEPS_CORE; do \
+	      if [ "$$INSERTED" = "0" ] && { [ "$$S" = "encode-constants" ] || [ "$$S" = "encrypt-strings" ] || [ "$$S" = "flatten-cfg" ]; }; then \
+	        STEPS_WITH_BUF="$$STEPS_WITH_BUF $$BUF $$S"; \
 	        INSERTED=1; \
 	      else \
-	        STEPS_WITH_DB="$$STEPS_WITH_DB $$S"; \
+	        STEPS_WITH_BUF="$$STEPS_WITH_BUF $$S"; \
 	      fi; \
 	    done; \
-	    if [ "$$INSERTED" = "0" ]; then STEPS_WITH_DB="$$STEPS_WITH_DB dict-bytes"; fi; \
-	    STEPS=$$STEPS_WITH_DB; \
+	    if [ "$$INSERTED" = "0" ]; then STEPS_WITH_BUF="$$STEPS_WITH_BUF $$BUF"; fi; \
+	    STEPS=$$STEPS_WITH_BUF; \
 	  else \
-	    STEPS=$$STEPS_NO_DB; \
+	    STEPS=$$STEPS_CORE; \
 	  fi; \
 	  STEPS=$$(echo $$STEPS); \
 	  # dict-rename last so _fev_* names from earlier passes get scrubbed. \

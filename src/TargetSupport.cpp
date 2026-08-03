@@ -107,6 +107,46 @@ std::vector<CompileTarget> discoverCompileTargets() {
     Targets.push_back(std::move(CrossArm));
   }
 
+  {
+    CompileTarget ClangClDll;
+    ClangClDll.Id = "clang-cl-dll";
+    ClangClDll.Description =
+        "Windows DLL via clang-cl /LD (needs MSVC SDK on the host; "
+        "on Linux without VS prefer mingw-dll)";
+    ClangClDll.Triple = "x86_64-pc-windows-msvc";
+    ClangClDll.ExeSuffix = ".dll";
+    ClangClDll.Style = DriverStyle::ClangCl;
+    ClangClDll.ExtraFlags = {"/nologo", "/LD", "/std:c11", "/W3"};
+    resolveCompiler(ClangClDll, {"clang-cl"});
+    Targets.push_back(std::move(ClangClDll));
+  }
+
+  {
+    CompileTarget MingwDll;
+    MingwDll.Id = "mingw-dll";
+    MingwDll.Description = "Windows x86_64 DLL via MinGW-w64 (-shared)";
+    MingwDll.Triple = "x86_64-w64-mingw32";
+    MingwDll.ExeSuffix = ".dll";
+    MingwDll.Style = DriverStyle::Gnu;
+    MingwDll.ExtraFlags = {
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-shared",
+        "--target=x86_64-w64-mingw32",
+        "-isystem",
+        "/usr/x86_64-w64-mingw32/include",
+    };
+    if (!resolveCompiler(MingwDll, {"x86_64-w64-mingw32-gcc"})) {
+      if (resolveCompiler(MingwDll, {"clang", "clang++"})) {
+        // Keep --target / -isystem for clang.
+      }
+    } else {
+      MingwDll.ExtraFlags = {"-std=c11", "-Wall", "-Wextra", "-shared"};
+    }
+    Targets.push_back(std::move(MingwDll));
+  }
+
   return Targets;
 }
 
@@ -136,7 +176,11 @@ void listCompileTargets(llvm::raw_ostream &OS) {
   OS << "\nExample:\n"
         "  fev --emit-binary --binary-target=host examples/sample.c --\n"
         "  fev --emit-binary --binary-target=mingw-x64 examples/sample2.c -- \\\n"
-        "      --target=x86_64-w64-mingw32 -isystem /usr/x86_64-w64-mingw32/include\n";
+        "      --target=x86_64-w64-mingw32 -isystem /usr/x86_64-w64-mingw32/include\n"
+        "  fev --passes=to-dll --emit-dll --binary-target=mingw-dll \\\n"
+        "      examples/sample2.c --\n"
+        "  fev --passes=to-dll --emit-dll --binary-target=clang-cl-dll \\\n"
+        "      examples/sample2.c --   # needs MSVC SDK\n";
 }
 
 std::string defaultBinaryPath(llvm::StringRef ObfuscatedSource,
@@ -175,9 +219,16 @@ int compileToBinary(const CompileTarget &Target,
     Owned.push_back(F);
   for (const std::string &F : ExtraFlags)
     Owned.push_back(F);
-  Owned.emplace_back("-o");
-  Owned.emplace_back(BinaryOut.str());
-  Owned.emplace_back(ObfuscatedSource.str());
+
+  if (Target.Style == DriverStyle::ClangCl) {
+    // clang-cl: /Fe:out.dll  (colon form handles paths cleanly)
+    Owned.push_back(std::string("/Fe:") + BinaryOut.str());
+    Owned.push_back(ObfuscatedSource.str());
+  } else {
+    Owned.emplace_back("-o");
+    Owned.emplace_back(BinaryOut.str());
+    Owned.emplace_back(ObfuscatedSource.str());
+  }
 
   std::vector<llvm::StringRef> Args;
   Args.reserve(Owned.size());
