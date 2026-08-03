@@ -3,6 +3,10 @@
 /cmake-build-*/
 compile_commands.json
 
+# Personal scratch (user sources + local build outs)
+/workspace/*
+!/workspace/.gitkeep
+
 # FEV / Make outputs
 *_obf.*
 *_obf

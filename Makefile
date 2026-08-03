@@ -5,11 +5,9 @@
 #   make list / list-targets / clean / help
 #
 # Obfuscate / compare:
-#   make FILE=examples/sample.c BINARY=1
-#   make FILE=examples/sample.c PASSES=none BINARY=1              # → sample_orig.c
-#   make FILE=examples/sample.c PASSES=all SUFFIX=_obf BINARY=1
-#   make FILE=examples/sample2.c PASSES=none SUFFIX=_orig BINARY=1
-#   make FILE=examples/sample_cff.c PASSES=flatten-cfg BINARY=1 SEED=1
+#   make FILE=workspace/sample.c BINARY=1
+#   make FILE=workspace/sample.c PASSES=none BINARY=1
+#   make FILE=tests/fixtures/sample_cff.c PASSES=flatten-cfg BINARY=1 SEED=1
 #
 # PASSES=all (default) applies each pass in turn. PASSES=none copies the
 # source unchanged (baseline for A/B). SUFFIX defaults to _obf, or _orig
@@ -131,21 +129,18 @@ help:
 	@echo "  OUTDIR=dir   → write outputs under dir (created if missing)"
 	@echo ""
 	@echo "Examples:"
-	@echo "  make FILE=examples/sample2.c CONFIG=configs/win-exe.json"
-	@echo "  make FILE=examples/sample2.c CONFIG=configs/win-dll.json"
-	@echo "  make FILE=examples/sample.c BINARY=1"
-	@echo "  make FILE=examples/sample.c PASSES=none BINARY=1"
-	@echo "  make FILE=examples/sample.c PASSES=all SUFFIX=_obf BINARY=1"
-	@echo "  make FILE=examples/sample2.c PASSES=none SUFFIX=_orig BINARY=1"
-	@echo "  make FILE=examples/sample2.c BINARY=1"
-	@echo "  make FILE=examples/sample2.c PASSES=to-dll BINARY=1 TARGET=mingw-dll SUFFIX=_dll"
-	@echo "  make FILE=examples/sample2.c PASSES=all,to-dll BINARY=1 TARGET=mingw-dll OUTDIR=examples/out"
+	@echo "  make FILE=workspace/foo.c CONFIG=configs/win-exe.json"
+	@echo "  make FILE=workspace/foo.c CONFIG=configs/win-dll.json"
+	@echo "  make FILE=workspace/foo.c BINARY=1"
+	@echo "  make FILE=tests/fixtures/sample.c BINARY=1"
+	@echo "  make FILE=tests/fixtures/sample2.c CONFIG=configs/win-exe.json"
 	@echo ""
 	@echo "Smoke: make test | test-buffers | test-mba | test-cff | test-opaque |"
 	@echo "             test-sample2 | test-dll | check"
 	@echo "Note: to-dll is opt-in (not in PASSES=all). Prefer CONFIG=configs/win-*.json."
 	@echo "      TARGET=clang-cl-dll needs MSVC SDK; on Linux use mingw-dll."
 	@echo "      configs/test-buffers.json enables interpass_validate (run via make test-buffers / check)."
+	@echo "      workspace/ is gitignored personal scratch; tests live under tests/fixtures/."
 
 configure: $(BUILD_DIR)/CMakeCache.txt
 
@@ -337,15 +332,17 @@ run obfuscate: $(FEV)
 # Prefer: make check   (runs all safety nets including inter-pass buffers)
 
 test: $(FEV)
-	$(MAKE) --no-print-directory FILE=examples/sample.c \
-		PASSES=encrypt-strings,encrypt-buffers BINARY=1 TARGET=host SEED=0xC0FFEE
-	@test -f examples/sample_obf.c && test -f examples/sample_obf
-	@OUT=$$(examples/sample_obf); echo "$$OUT"; \
+	@mkdir -p tests/out
+	$(MAKE) --no-print-directory FILE=tests/fixtures/sample.c \
+		PASSES=encrypt-strings,encrypt-buffers BINARY=1 TARGET=host SEED=0xC0FFEE \
+		OUTDIR=tests/out
+	@test -f tests/out/sample_obf.c && test -f tests/out/sample_obf
+	@OUT=$$(tests/out/sample_obf); echo "$$OUT"; \
 	  echo "$$OUT" | grep -qx 'hello from fev: sum=5' \
 	  || (echo "FAIL: unexpected program output" >&2; exit 1)
-	@! grep -F 'hello from fev' examples/sample_obf.c >/dev/null \
+	@! grep -F 'hello from fev' tests/out/sample_obf.c >/dev/null \
 	  || (echo "FAIL: cleartext format string still present" >&2; exit 1)
-	@echo "PASS: examples/sample_obf.c + examples/sample_obf"
+	@echo "PASS: tests/out/sample_obf.c + tests/out/sample_obf"
 	@$(MAKE) --no-print-directory test-buffers
 
 ## Inter-pass buffer integrity (config-driven). Also pulled in by `make test`.
@@ -376,18 +373,19 @@ test-mba: $(FEV)
 	@echo "PASS: mba+flatten oracle (configs/test-mba.json)"
 
 test-sample2: $(FEV)
-	$(MAKE) --no-print-directory FILE=examples/sample2.c \
+	@mkdir -p tests/out
+	$(MAKE) --no-print-directory FILE=tests/fixtures/sample2.c \
 		PASSES=mba-substitute,flatten-cfg,opaque-predicates,encrypt-buffers \
 		SEQUENTIAL=1 BINARY=1 TARGET=mingw-x64 SEED=0xC0FFEE \
-		CLANG_FLAGS="$(MINGW_FLAGS)"
-	@test -f examples/sample2_obf.c && test -f examples/sample2_obf.exe
-	@! grep -q '0xfc, 0x48, 0x83' examples/sample2_obf.c \
+		OUTDIR=tests/out CLANG_FLAGS="$(MINGW_FLAGS)"
+	@test -f tests/out/sample2_obf.c && test -f tests/out/sample2_obf.exe
+	@! grep -q '0xfc, 0x48, 0x83' tests/out/sample2_obf.c \
 	  || (echo "FAIL: cleartext payload prefix still present" >&2; exit 1)
-	@grep -q '_fev_ct_my_payload' examples/sample2_obf.c
-	@grep -q '_fev_sw' examples/sample2_obf.c
-	@file examples/sample2_obf.exe | grep -qi 'PE32+' \
-	  || (echo "FAIL: expected PE32+ binary" >&2; file examples/sample2_obf.exe; exit 1)
-	@echo "PASS: examples/sample2_obf.c + examples/sample2_obf.exe"
+	@grep -q '_fev_ct_my_payload' tests/out/sample2_obf.c
+	@grep -q '_fev_sw' tests/out/sample2_obf.c
+	@file tests/out/sample2_obf.exe | grep -qi 'PE32+' \
+	  || (echo "FAIL: expected PE32+ binary" >&2; file tests/out/sample2_obf.exe; exit 1)
+	@echo "PASS: tests/out/sample2_obf.c + tests/out/sample2_obf.exe"
 
 test-dll: $(FEV)
 	@mkdir -p tests/out
@@ -405,28 +403,30 @@ test-dll: $(FEV)
 	@echo "PASS: to-dll MinGW smoke (configs/test-dll.json)"
 
 test-cff: $(FEV)
-	$(MAKE) --no-print-directory FILE=examples/sample_cff.c \
-		PASSES=flatten-cfg BINARY=1 TARGET=host SEED=1
-	@test -f examples/sample_cff_obf.c && test -f examples/sample_cff_obf
-	@grep -q '_fev_sw' examples/sample_cff_obf.c
-	@grep -q 'while' examples/sample_cff_obf.c
-	@OUT=$$(examples/sample_cff_obf); echo "$$OUT"; \
+	@mkdir -p tests/out
+	$(MAKE) --no-print-directory FILE=tests/fixtures/sample_cff.c \
+		PASSES=flatten-cfg BINARY=1 TARGET=host SEED=1 OUTDIR=tests/out
+	@test -f tests/out/sample_cff_obf.c && test -f tests/out/sample_cff_obf
+	@grep -q '_fev_sw' tests/out/sample_cff_obf.c
+	@grep -q 'while' tests/out/sample_cff_obf.c
+	@OUT=$$(tests/out/sample_cff_obf); echo "$$OUT"; \
 	  echo "$$OUT" | grep -qx 'laszlo cff: x=12' \
 	  || (echo "FAIL: unexpected program output" >&2; exit 1)
-	@echo "PASS: examples/sample_cff_obf.c + examples/sample_cff_obf"
+	@echo "PASS: tests/out/sample_cff_obf.c + tests/out/sample_cff_obf"
 
 test-opaque: $(FEV)
-	$(MAKE) --no-print-directory FILE=examples/sample_opaque.c \
+	@mkdir -p tests/out
+	$(MAKE) --no-print-directory FILE=tests/fixtures/sample_opaque.c \
 		PASSES=opaque-predicates BINARY=1 TARGET=host SEED=0xC0FFEE \
-		FEV_FLAGS="--opaque-density=1.0 --opaque-fib-n=12"
-	@test -f examples/sample_opaque_obf.c && test -f examples/sample_opaque_obf
-	@grep -q 'FEV_OPAQUE_RUNTIME' examples/sample_opaque_obf.c
-	@grep -qE '_fev_cityhash64|_fev_modexp|_fev_fib|_fev_collatz_ok' examples/sample_opaque_obf.c
-	@grep -q '_fev_ox_' examples/sample_opaque_obf.c
-	@OUT=$$(examples/sample_opaque_obf); echo "$$OUT"; \
+		OUTDIR=tests/out FEV_FLAGS="--opaque-density=1.0 --opaque-fib-n=12"
+	@test -f tests/out/sample_opaque_obf.c && test -f tests/out/sample_opaque_obf
+	@grep -q 'FEV_OPAQUE_RUNTIME' tests/out/sample_opaque_obf.c
+	@grep -qE '_fev_cityhash64|_fev_modexp|_fev_fib|_fev_collatz_ok' tests/out/sample_opaque_obf.c
+	@grep -q '_fev_ox_' tests/out/sample_opaque_obf.c
+	@OUT=$$(tests/out/sample_opaque_obf); echo "$$OUT"; \
 	  echo "$$OUT" | grep -qx 'opaque demo: 49' \
 	  || (echo "FAIL: unexpected program output" >&2; exit 1)
-	@echo "PASS: examples/sample_opaque_obf.c + examples/sample_opaque_obf"
+	@echo "PASS: tests/out/sample_opaque_obf.c + tests/out/sample_opaque_obf"
 
 ## Full developer check — run after modifying passes / buffer pipeline.
 ## `test` already includes test-buffers.
@@ -441,6 +441,4 @@ test-all: check
 
 clean:
 	rm -rf $(BUILD_DIR) out tests/out
-	rm -f examples/*_obf.c examples/*_obf.h examples/*_obf examples/*_obf.exe
-	rm -f examples/*_orig.c examples/*_orig.h examples/*_orig examples/*_orig.exe
-	rm -f examples/out/* 2>/dev/null || true
+	rm -f tests/fixtures/*_obf.c tests/fixtures/*_obf tests/fixtures/*_obf.exe 2>/dev/null || true

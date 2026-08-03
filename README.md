@@ -55,25 +55,27 @@ Recipes live under [`configs/`](configs/). Pick one and go:
 
 ```bash
 # Windows EXE (full pipeline)
-./build/fev --config configs/win-exe.json examples/sample2.c
+./build/fev --config configs/win-exe.json workspace/sample2.c
 
 # Windows DLL (full pipeline + to-dll)
-./build/fev --config configs/win-dll.json examples/sample2.c
+./build/fev --config configs/win-dll.json workspace/sample2.c
 
-# Host smoke (sample.c)
-./build/fev --config configs/host-smoke.json examples/sample.c
+# Host smoke
+./build/fev --config configs/host-smoke.json workspace/sample.c
 
 # Override one knob from the recipe
-./build/fev --config configs/win-exe.json --seed=1 examples/sample2.c
+./build/fev --config configs/win-exe.json --seed=1 workspace/sample2.c
 ```
 
 Make:
 
 ```bash
-make FILE=examples/sample2.c CONFIG=configs/win-exe.json
-make FILE=examples/sample2.c CONFIG=configs/win-dll.json
-make FILE=examples/sample.c  CONFIG=configs/host-smoke.json
+make FILE=workspace/sample2.c CONFIG=configs/win-exe.json
+make FILE=workspace/sample2.c CONFIG=configs/win-dll.json
+make FILE=workspace/sample.c  CONFIG=configs/host-smoke.json
 ```
+
+Personal sources live under **`workspace/`** (gitignored). Automated tests use **`tests/fixtures/`**.
 
 Each config sets `passes`, `emit` (`none`|`exe`|`dll`), `target`, `outdir`, `clang_flags`, and related knobs so you do not juggle `--emit-binary` vs `--emit-dll` vs `--binary-target` by hand.
 
@@ -171,12 +173,16 @@ In `--passes=all`: **scramble → encrypt-buffers → dict-bytes → array-split
 
 ```text
 CUSTOM/FEV/
-├── configs/           # win-exe.json, win-dll.json, host-smoke.json
+├── configs/           # win-exe.json, win-dll.json, host-smoke.json, test-*.json
+├── tests/
+│   ├── fixtures/      # committed smoke/regression inputs
+│   └── out/           # generated (gitignored)
+├── workspace/         # personal scratch (gitignored)
 ├── CMakeLists.txt
 ├── Makefile
 ├── include/fev/
 └── src/
-    ├── Config.cpp     # JSON recipe loader
+    ├── Config.cpp
     ├── main.cpp
     └── passes/
 ```

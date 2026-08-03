@@ -232,14 +232,14 @@ static cl::extrahelp MoreHelp(R"(
   Made by @tmajik
 
 Examples:
-  fev --config configs/win-exe.json examples/sample2.c
-  fev --config configs/win-dll.json examples/sample2.c
-  fev --config configs/host-smoke.json examples/sample.c
+  fev --config configs/win-exe.json workspace/sample2.c
+  fev --config configs/win-dll.json workspace/sample2.c
+  fev --config configs/host-smoke.json workspace/sample.c
   fev --list-passes
   fev --list-targets
-  fev --config configs/win-exe.json --seed=1 examples/sample2.c
-  fev --passes=all --emit-binary --binary-target=mingw-x64 examples/sample2.c --
-  fev -v --passes=flatten-cfg examples/sample_cff.c --
+  fev --config configs/win-exe.json --seed=1 workspace/sample2.c
+  fev --passes=all --emit-binary --binary-target=mingw-x64 workspace/sample2.c --
+  fev -v --passes=flatten-cfg tests/fixtures/sample_cff.c --
 
 Prefer --config for EXE/DLL recipes. Explicit CLI flags override the file.
 Multiple passes (including --passes=all) re-parse between each step.

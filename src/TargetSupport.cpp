@@ -174,13 +174,13 @@ void listCompileTargets(llvm::raw_ostream &OS) {
     OS << "\n";
   }
   OS << "\nExample:\n"
-        "  fev --emit-binary --binary-target=host examples/sample.c --\n"
-        "  fev --emit-binary --binary-target=mingw-x64 examples/sample2.c -- \\\n"
+        "  fev --emit-binary --binary-target=host tests/fixtures/sample.c --\n"
+        "  fev --emit-binary --binary-target=mingw-x64 tests/fixtures/sample2.c -- \\\n"
         "      --target=x86_64-w64-mingw32 -isystem /usr/x86_64-w64-mingw32/include\n"
         "  fev --passes=to-dll --emit-dll --binary-target=mingw-dll \\\n"
-        "      examples/sample2.c --\n"
+        "      tests/fixtures/sample2.c --\n"
         "  fev --passes=to-dll --emit-dll --binary-target=clang-cl-dll \\\n"
-        "      examples/sample2.c --   # needs MSVC SDK\n";
+        "      tests/fixtures/sample2.c --   # needs MSVC SDK\n";
 }
 
 std::string defaultBinaryPath(llvm::StringRef ObfuscatedSource,

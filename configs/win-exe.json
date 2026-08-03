@@ -2,7 +2,7 @@
   "description": "Full obfuscation → Windows console PE (.exe)",
   "passes": "all",
   "seed": "0xC0FFEE",
-  "outdir": "examples/out",
+  "outdir": "workspace/out",
   "emit": "exe",
   "target": "mingw-x64",
   "validate": "warn",
