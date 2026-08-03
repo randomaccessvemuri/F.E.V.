@@ -1,6 +1,7 @@
 #include "fev/Pass.h"
 #include "fev/Log.h"
 #include "fev/RewriteUtils.h"
+#include "fev/Validate.h"
 
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/Stmt.h"
@@ -1161,6 +1162,11 @@ public:
       void run(const MatchFinder::MatchResult &Result) override {
         const auto *Fn = Result.Nodes.getNodeAs<FunctionDecl>("fn");
         if (!Fn || !Fn->hasBody())
+          return;
+        // Buffer restore / crypto helpers (ChaCha, scramble, FNV integrity) must
+        // stay unflattened — CFF mangles multi-loop index temps and breaks
+        // decrypt→unscramble round-trips (integrity wipe → zeroed buffers).
+        if (fev::isFeVArtifactName(Fn->getName()))
           return;
         auto *Body = dyn_cast<CompoundStmt>(Fn->getBody());
         if (!Body)

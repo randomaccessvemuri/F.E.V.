@@ -1,4 +1,5 @@
 #include "fev/Compiler.h"
+#include "fev/Config.h"
 #include "fev/Log.h"
 #include "fev/Pass.h"
 #include "fev/TargetSupport.h"
@@ -14,6 +15,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -21,6 +23,12 @@ using namespace clang::tooling;
 using namespace llvm;
 
 static cl::OptionCategory FevCategory("fev options");
+
+static cl::opt<std::string>
+    ConfigFile("config",
+               cl::desc("JSON recipe file (passes, emit, target, outdir, …). "
+                        "CLI flags that are explicitly set override the file"),
+               cl::value_desc("path"), cl::init(""), cl::cat(FevCategory));
 
 static cl::opt<std::string>
     OutputPath("o",
@@ -215,38 +223,24 @@ static cl::extrahelp MoreHelp(R"(
   Made by @tmajik
 
 Examples:
+  fev --config configs/win-exe.json examples/sample2.c
+  fev --config configs/win-dll.json examples/sample2.c
+  fev --config configs/host-smoke.json examples/sample.c
   fev --list-passes
   fev --list-targets
-  fev examples/sample.c --
-      → examples/sample_obf.c
-  fev --emit-binary --binary-target=host --clang-flags="-O2 -g" examples/sample.c --
-  fev --emit-binary --binary-target=mingw-x64 \
-        --clang-flags="--target=x86_64-w64-mingw32 -isystem /usr/x86_64-w64-mingw32/include" \
-        examples/sample2.c --
-  fev --passes=all --emit-binary examples/sample.c --
-  fev --passes=to-dll --emit-dll --binary-target=mingw-dll examples/sample2.c --
-  fev --passes=encrypt-buffers,to-dll --emit-dll --binary-target=clang-cl-dll \\
-        examples/sample2.c --
-  fev -v --log-color=always --passes=flatten-cfg examples/sample_cff.c --
+  fev --config configs/win-exe.json --seed=1 examples/sample2.c
+  fev --passes=all --emit-binary --binary-target=mingw-x64 examples/sample2.c --
+  fev -v --passes=flatten-cfg examples/sample_cff.c --
 
-Multiple passes (including --passes=all) re-parse between each step so
-AST-based passes like dict-rename see text injected by earlier passes.
-to-dll is opt-in only (not part of --passes=all); run it last after
-passes that inject at main().
+Prefer --config for EXE/DLL recipes. Explicit CLI flags override the file.
+Multiple passes (including --passes=all) re-parse between each step.
+to-dll is opt-in (not in --passes=all); configs/win-dll.json includes it.
 
---clang-flags is a single string tokenized like a shell command line.
-Flags after '--' are still accepted as rewriter parse flags (merged with
---clang-flags).
+--clang-flags / config clang_flags apply to rewriter parse and final compile.
+Flags after '--' are also rewriter parse flags (merged).
 
-Logging: debug (-v), info, warn, error. Color when stderr is a TTY
-(--log-color=always|never, or NO_COLOR / FORCE_COLOR).
-Pass runs tag console/file lines as [pass-name]. Use --log-file=fev.log
-(or FEV_LOG_FILE) to append all info/debug lines to one file (debug is
-always recorded in the file, even without -v).
-
+Logging: debug (-v), info, warn, error. --log-file / FEV_LOG_FILE.
 Validation: --validate=warn|strict|off (default warn; FEV_VALIDATE).
-Buffer passes (dict-bytes, scramble-arrays, array-split, encrypt-buffers)
-do rewrite-time round-trips and inject FNV integrity checks when not off.
 )");
 
 static bool hasFlag(int argc, const char **argv, StringRef Flag) {
@@ -317,11 +311,10 @@ static bool ensureParentDir(StringRef FilePath) {
   return true;
 }
 
-/// When compiling for mingw / DLL targets, ensure the rewriter can parse
-/// windows.h even if the user forgot parse flags after '--'.
-static void maybeAddMingwParseFlags(ClangTool &Tool, StringRef TargetId) {
-  if (TargetId != "mingw-x64" && TargetId != "mingw-dll" &&
-      TargetId != "clang-cl-dll")
+/// When compiling for mingw / DLL targets (or Windows sources), ensure the
+/// rewriter can parse windows.h even if the user forgot flags after '--'.
+static void maybeAddMingwParseFlags(ClangTool &Tool, bool Enable) {
+  if (!Enable)
     return;
   Tool.appendArgumentsAdjuster(getInsertArgumentAdjuster(
       {"--target=x86_64-w64-mingw32", "-isystem",
@@ -431,82 +424,200 @@ int main(int argc, const char **argv) {
     return 1;
   }
 
+  // --- Load optional JSON recipe; explicit CLI wins on every field. ---
+  std::optional<fev::FileConfig> FileCfg;
+  if (!ConfigFile.empty()) {
+    FileCfg = fev::loadConfigFile(ConfigFile);
+    if (!FileCfg)
+      return 1;
+  }
+
+  auto cliUnset = [](const auto &Opt) { return Opt.getNumOccurrences() == 0; };
+
+  std::string EffectiveOut = OutputPath;
+  if (cliUnset(OutputPath) && FileCfg && FileCfg->Output)
+    EffectiveOut = *FileCfg->Output;
+  std::string EffectiveOutDir = OutDir;
+  if (cliUnset(OutDir) && FileCfg && FileCfg->OutDir)
+    EffectiveOutDir = *FileCfg->OutDir;
+
   std::string OutFile =
-      resolveOutputPath(Sources.front(), OutputPath, OutDir);
+      resolveOutputPath(Sources.front(), EffectiveOut, EffectiveOutDir);
   if (!ensureParentDir(OutFile))
     return 1;
+
+  // Emit: CLI --emit-dll / --emit-binary, else config emit, else none.
+  fev::EmitKind Emit = fev::EmitKind::None;
+  if (EmitDll)
+    Emit = fev::EmitKind::Dll;
+  else if (EmitBinary)
+    Emit = fev::EmitKind::Exe;
+  else if (FileCfg && FileCfg->Emit)
+    Emit = *FileCfg->Emit;
 
   auto Targets = fev::discoverCompileTargets();
   fev::CompileTarget *Chosen = nullptr;
 
-  const bool WantBinary = EmitBinary || EmitDll;
   std::string EffectiveTarget = BinaryTarget;
-  if (EmitDll && BinaryTarget.getNumOccurrences() == 0) {
-    // clang-cl /LD needs an MSVC SDK. On Linux (and similar) prefer MinGW
-    // -shared when available; use clang-cl-dll explicitly on Windows/VS hosts.
+  if (cliUnset(BinaryTarget)) {
+    if (FileCfg && FileCfg->Target) {
+      EffectiveTarget = *FileCfg->Target;
+    } else if (Emit == fev::EmitKind::Dll) {
 #if defined(_WIN32)
-    EffectiveTarget = "clang-cl-dll";
-#else
-    if (fev::CompileTarget *Mw =
-            fev::findCompileTarget(Targets, "mingw-dll");
-        Mw && Mw->Available) {
-      EffectiveTarget = "mingw-dll";
-    } else {
       EffectiveTarget = "clang-cl-dll";
-    }
+#else
+      if (fev::CompileTarget *Mw =
+              fev::findCompileTarget(Targets, "mingw-dll");
+          Mw && Mw->Available)
+        EffectiveTarget = "mingw-dll";
+      else
+        EffectiveTarget = "clang-cl-dll";
 #endif
-    fev::logInfo() << "--emit-dll: using --binary-target=" << EffectiveTarget;
+    } else if (Emit == fev::EmitKind::Exe) {
+      if (fev::sourceLooksLikeWindows(Sources.front()))
+        EffectiveTarget = "mingw-x64";
+      // else keep default "host"
+    }
   }
 
+  const bool WantBinary = Emit != fev::EmitKind::None;
   if (WantBinary) {
     Chosen = fev::findCompileTarget(Targets, EffectiveTarget);
     if (!Chosen) {
-      fev::logError() << "unknown --binary-target='" << EffectiveTarget
+      fev::logError() << "unknown --binary-target/target='" << EffectiveTarget
                       << "' (try --list-targets)";
       return 1;
     }
     if (!Chosen->Available) {
-      fev::logError() << "--binary-target='" << EffectiveTarget
+      fev::logError() << "target '" << EffectiveTarget
                       << "' is not available on this system";
       fev::listCompileTargets(errs());
       return 1;
     }
   }
 
+  if (WantBinary && EffectiveTarget == "host" &&
+      fev::sourceLooksLikeWindows(Sources.front())) {
+    fev::logError()
+        << "refusing to compile Windows source with target=host "
+           "(missing windows.h). Use --config configs/win-exe.json "
+           "(or --binary-target=mingw-x64 / configs/win-dll.json)";
+    return 1;
+  }
+
   fev::PassConfig Config;
-  Config.EnabledPasses = collectPasses();
+  if (!cliUnset(PassList))
+    Config.EnabledPasses = collectPasses();
+  else if (FileCfg && FileCfg->Passes)
+    Config.EnabledPasses = fev::splitPasses(*FileCfg->Passes);
+  // else empty → default encrypt-strings,encrypt-buffers
+
   Config.XorKey = static_cast<std::uint8_t>(XorKey);
+  if (cliUnset(XorKey) && FileCfg && FileCfg->XorKey)
+    Config.XorKey = *FileCfg->XorKey;
+
   Config.Seed = Seed;
+  if (cliUnset(Seed) && FileCfg && FileCfg->Seed)
+    Config.Seed = *FileCfg->Seed;
+
   Config.MbaDensity = MbaDensity;
+  if (cliUnset(MbaDensity) && FileCfg && FileCfg->MbaDensity)
+    Config.MbaDensity = *FileCfg->MbaDensity;
   Config.OpaqueDensity = OpaqueDensity;
+  if (cliUnset(OpaqueDensity) && FileCfg && FileCfg->OpaqueDensity)
+    Config.OpaqueDensity = *FileCfg->OpaqueDensity;
   Config.JunkDensity = JunkDensity;
+  if (cliUnset(JunkDensity) && FileCfg && FileCfg->JunkDensity)
+    Config.JunkDensity = *FileCfg->JunkDensity;
   Config.OpaqueFibN = OpaqueFibN;
+  if (cliUnset(OpaqueFibN) && FileCfg && FileCfg->OpaqueFibN)
+    Config.OpaqueFibN = *FileCfg->OpaqueFibN;
   Config.SleepSeconds = SleepSeconds;
+  if (cliUnset(SleepSeconds) && FileCfg && FileCfg->SleepSeconds)
+    Config.SleepSeconds = *FileCfg->SleepSeconds;
   Config.SleepMinSeconds = SleepMinSeconds;
+  if (cliUnset(SleepMinSeconds) && FileCfg && FileCfg->SleepMinSeconds)
+    Config.SleepMinSeconds = *FileCfg->SleepMinSeconds;
   Config.SleepMaxSeconds = SleepMaxSeconds;
+  if (cliUnset(SleepMaxSeconds) && FileCfg && FileCfg->SleepMaxSeconds)
+    Config.SleepMaxSeconds = *FileCfg->SleepMaxSeconds;
   Config.FlattenMinStmts = FlattenMinStmts;
+  if (cliUnset(FlattenMinStmts) && FileCfg && FileCfg->FlattenMinStmts)
+    Config.FlattenMinStmts = *FileCfg->FlattenMinStmts;
   Config.ArrayChunkSize = ArrayChunkSize;
+  if (cliUnset(ArrayChunkSize) && FileCfg && FileCfg->ArrayChunkSize)
+    Config.ArrayChunkSize = *FileCfg->ArrayChunkSize;
   Config.ArraySplitMin = ArraySplitMin;
+  if (cliUnset(ArraySplitMin) && FileCfg && FileCfg->ArraySplitMin)
+    Config.ArraySplitMin = *FileCfg->ArraySplitMin;
+
   Config.NameDictPath = NameDict;
+  if (cliUnset(NameDict) && FileCfg && FileCfg->NameDictPath)
+    Config.NameDictPath = *FileCfg->NameDictPath;
   Config.DllEntryName = DllEntry;
+  if (cliUnset(DllEntry) && FileCfg && FileCfg->DllEntryName)
+    Config.DllEntryName = *FileCfg->DllEntryName;
   Config.DllExport = DllExport;
+  if (cliUnset(DllExport) && FileCfg && FileCfg->DllExport)
+    Config.DllExport = *FileCfg->DllExport;
   Config.DllThread = DllThread;
+  if (cliUnset(DllThread) && FileCfg && FileCfg->DllThread)
+    Config.DllThread = *FileCfg->DllThread;
+
   {
     std::string Mode = ValidateOpt;
-    if (const char *Env = std::getenv("FEV_VALIDATE")) {
-      if (Env[0] != '\0' && ValidateOpt.getNumOccurrences() == 0)
+    if (cliUnset(ValidateOpt) && FileCfg && FileCfg->Validate)
+      Mode = *FileCfg->Validate;
+    else if (const char *Env = std::getenv("FEV_VALIDATE")) {
+      if (Env[0] != '\0' && cliUnset(ValidateOpt) &&
+          !(FileCfg && FileCfg->Validate))
         Mode = Env;
     }
     Config.Validate = fev::parseValidateMode(Mode);
   }
 
+  // Re-validate ranges after config merge.
+  if (Config.MbaDensity < 0.0 || Config.MbaDensity > 1.0 ||
+      Config.OpaqueDensity < 0.0 || Config.OpaqueDensity > 1.0 ||
+      Config.JunkDensity < 0.0 || Config.JunkDensity > 1.0 ||
+      Config.OpaqueFibN < 3 || Config.OpaqueFibN > 40 ||
+      Config.SleepSeconds < 1 || Config.SleepSeconds > 600) {
+    fev::logError() << "config/CLI combination has out-of-range knobs "
+                       "(densities, fib-n, sleep-seconds)";
+    return 1;
+  }
+
+  std::string EffectiveClangFlags = ClangFlags;
+  if (cliUnset(ClangFlags) && FileCfg && FileCfg->ClangFlags)
+    EffectiveClangFlags = *FileCfg->ClangFlags;
+
   const std::vector<std::string> ExtraClangFlags =
-      fev::tokenizeFlagString(ClangFlags);
+      fev::tokenizeFlagString(EffectiveClangFlags);
   if (!ExtraClangFlags.empty())
-    fev::logDebug() << "extra clang flags: " << ClangFlags;
+    fev::logDebug() << "extra clang flags: " << EffectiveClangFlags;
+
+  std::string PassesLog;
+  if (Config.EnabledPasses.empty())
+    PassesLog = "(default encrypt-strings,encrypt-buffers)";
+  else {
+    for (size_t I = 0; I < Config.EnabledPasses.size(); ++I) {
+      if (I)
+        PassesLog += ',';
+      PassesLog += Config.EnabledPasses[I];
+    }
+  }
+  if (FileCfg) {
+    const std::string CfgName =
+        llvm::sys::path::filename(FileCfg->Path).str();
+    fev::logInfo() << "config: " << CfgName << " → passes=" << PassesLog
+                   << " emit=" << fev::emitKindName(Emit)
+                   << " target=" << EffectiveTarget;
+    if (!FileCfg->Description.empty())
+      fev::logInfo() << "  " << FileCfg->Description;
+  }
 
   fev::logInfo() << "writing " << OutFile;
-  fev::logDebug() << "input '" << Sources.front() << "', seed=" << Seed;
+  fev::logDebug() << "input '" << Sources.front() << "', seed=" << Config.Seed;
 
   // Multi-pass must re-parse between steps: later passes (esp. dict-rename)
   // match the AST, but earlier passes only mutate Rewriter text. One shared
@@ -518,6 +629,33 @@ int main(int argc, const char **argv) {
     return 1;
   }
 
+  bool HasToDll = false;
+  for (fev::Pass *P : Pipeline) {
+    if (P->name() == "to-dll") {
+      HasToDll = true;
+      break;
+    }
+  }
+  if (HasToDll && Emit == fev::EmitKind::Exe) {
+    fev::logError()
+        << "to-dll produces DLL source but emit=exe. Use "
+           "--config configs/win-dll.json (or --emit-dll / emit:\"dll\"), "
+           "or drop to-dll from --passes";
+    return 1;
+  }
+  if (HasToDll && WantBinary && EffectiveTarget != "mingw-dll" &&
+      EffectiveTarget != "clang-cl-dll") {
+    fev::logError() << "to-dll requires a DLL target (mingw-dll or "
+                       "clang-cl-dll), got '"
+                    << EffectiveTarget << "'";
+    return 1;
+  }
+
+  const bool NeedMingwParse =
+      fev::targetNeedsMingwParseFlags(EffectiveTarget) ||
+      fev::sourceLooksLikeWindows(Sources.front()) ||
+      EffectiveClangFlags.find("mingw") != std::string::npos;
+
   auto runOne = [&](fev::PassConfig StepConfig, const std::string &InPath,
                     const std::string &StepOut) -> int {
     ClangTool StepTool(OptionsParser.getCompilations(),
@@ -525,8 +663,7 @@ int main(int argc, const char **argv) {
     StepTool.appendArgumentsAdjuster(getInsertArgumentAdjuster(
         {"-resource-dir", FEV_CLANG_RESOURCE_DIR},
         ArgumentInsertPosition::BEGIN));
-    if (WantBinary)
-      maybeAddMingwParseFlags(StepTool, EffectiveTarget);
+    maybeAddMingwParseFlags(StepTool, NeedMingwParse);
     if (!ExtraClangFlags.empty()) {
       std::vector<std::string> Adjust = ExtraClangFlags;
       StepTool.appendArgumentsAdjuster(
@@ -591,8 +728,26 @@ int main(int argc, const char **argv) {
     return 0;
 
   std::string BinOut = BinaryOutput;
+  if (cliUnset(BinaryOutput) && FileCfg && FileCfg->BinaryOutput)
+    BinOut = *FileCfg->BinaryOutput;
   if (BinOut.empty())
     BinOut = fev::defaultBinaryPath(OutFile, Chosen->ExeSuffix);
 
-  return fev::compileToBinary(*Chosen, OutFile, BinOut, ExtraClangFlags);
+  // Prefixed MinGW gcc rejects Clang's --target=; keep it for the rewriter only.
+  std::vector<std::string> LinkFlags = ExtraClangFlags;
+  const bool PrefixedMingwGcc =
+      Chosen->Compiler.find("mingw") != std::string::npos &&
+      Chosen->Compiler.find("gcc") != std::string::npos;
+  if (PrefixedMingwGcc) {
+    std::vector<std::string> Filtered;
+    Filtered.reserve(LinkFlags.size());
+    for (const std::string &F : LinkFlags) {
+      if (F.rfind("--target=", 0) == 0)
+        continue;
+      Filtered.push_back(F);
+    }
+    LinkFlags = std::move(Filtered);
+  }
+
+  return fev::compileToBinary(*Chosen, OutFile, BinOut, LinkFlags);
 }

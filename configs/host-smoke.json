@@ -1,0 +1,9 @@
+{
+  "description": "Host smoke: encrypt strings/buffers → native binary",
+  "passes": "encrypt-strings,encrypt-buffers",
+  "seed": "0xC0FFEE",
+  "outdir": "examples/out",
+  "emit": "exe",
+  "target": "host",
+  "validate": "warn"
+}

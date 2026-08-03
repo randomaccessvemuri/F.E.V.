@@ -26,10 +26,10 @@ Made by [@tmajik](https://github.com/tmajik).
 - CMake ≥ 3.20
 - Clang / LLVM development packages (tested with **LLVM 22**)
 - A C++17 compiler to build FEV
-- Optional toolchains for `--emit-binary` / `--emit-dll`:
+- Optional toolchains for linking:
   - host: `clang` or `gcc`
-  - Windows PE: `x86_64-w64-mingw32-gcc` (or clang with a MinGW sysroot)
-  - DLL via clang-cl: `clang-cl` + MSVC SDK (Windows); on Linux use `mingw-dll` instead
+  - Windows PE: `x86_64-w64-mingw32-gcc`
+  - DLL via clang-cl: `clang-cl` + MSVC SDK (Windows); on Linux use `mingw-dll`
 
 ---
 
@@ -37,10 +37,9 @@ Made by [@tmajik](https://github.com/tmajik).
 
 ```bash
 cd CUSTOM/FEV
-make                    # configure + build → build/fev
+make                    # → build/fev
 # or
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j"$(nproc)"
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j"$(nproc)"
 ```
 
 ```bash
@@ -50,104 +49,99 @@ cmake --build build -j"$(nproc)"
 
 ---
 
-## Quick start
+## Quick start (configs)
+
+Recipes live under [`configs/`](configs/). Pick one and go:
 
 ```bash
-# Default passes (encrypt-strings, encrypt-buffers) → examples/sample_obf.c
-./build/fev examples/sample.c --
+# Windows EXE (full pipeline)
+./build/fev --config configs/win-exe.json examples/sample2.c
 
-# Full pipeline (every pass except opt-in to-dll)
-./build/fev --passes=all --seed=0xC0FFEE --outdir=examples/out examples/sample.c --
+# Windows DLL (full pipeline + to-dll)
+./build/fev --config configs/win-dll.json examples/sample2.c
 
-# Also compile
-./build/fev --passes=all --emit-binary --binary-target=host examples/sample.c --
-./build/fev --passes=all --emit-binary --binary-target=mingw-x64 examples/sample2.c --
+# Host smoke (sample.c)
+./build/fev --config configs/host-smoke.json examples/sample.c
 
-# Convert to DLL source + link (Linux: mingw-dll; Windows/VS: clang-cl-dll)
-./build/fev --passes=all,to-dll --emit-dll --outdir=examples/out \
-  examples/sample2.c --
+# Override one knob from the recipe
+./build/fev --config configs/win-exe.json --seed=1 examples/sample2.c
 ```
 
-Via Make:
+Make:
 
 ```bash
-make FILE=examples/sample.c
-make FILE=examples/sample.c BINARY=1
-make FILE=examples/sample2.c BINARY=1 TARGET=mingw-x64
-make FILE=examples/sample2.c PASSES=to-dll BINARY=1 TARGET=mingw-dll SUFFIX=_dll
-make help
+make FILE=examples/sample2.c CONFIG=configs/win-exe.json
+make FILE=examples/sample2.c CONFIG=configs/win-dll.json
+make FILE=examples/sample.c  CONFIG=configs/host-smoke.json
 ```
 
-`PASSES` defaults to `all`. Use `PASSES=none` for an unchanged baseline copy (`SUFFIX=_orig`).
+Each config sets `passes`, `emit` (`none`|`exe`|`dll`), `target`, `outdir`, `clang_flags`, and related knobs so you do not juggle `--emit-binary` vs `--emit-dll` vs `--binary-target` by hand.
 
 ---
 
-## CLI
+## Config schema
+
+JSON object. Unknown keys are warned and ignored.
+
+| Key | Meaning |
+| --- | --- |
+| `description` | Logged at start |
+| `passes` | Comma string or array (`"all"`, `"all,to-dll"`, …) |
+| `emit` | `none` \| `exe` \| `dll` |
+| `target` | `host` \| `mingw-x64` \| `mingw-dll` \| `clang-cl-dll` \| … |
+| `outdir` / `output` | Output directory / file (`-o`) |
+| `binary_output` | Linked binary path |
+| `seed`, `validate`, `clang_flags` | Same as CLI |
+| `dll_entry`, `dll_export`, `dll_thread` | `to-dll` knobs |
+| densities / sleep / array_* | Matching CLI names (`mba_density` or `mba-density`) |
+
+**Merge rule:** config loads first; any CLI flag you set explicitly wins.
+
+**Guards:** `to-dll` + `emit:exe` errors; Windows sources + `target:host` + emit errors.
+
+---
+
+## CLI overrides
 
 | Flag | Meaning |
 | --- | --- |
-| `-o <file>` | Output file (default: `<input_stem>_obf.<ext>`) |
-| `--outdir=dir` | Put outputs (and multi-pass temps) under `dir` (created if missing). With `-o`, only the filename is used under outdir |
-| `--passes=a,b` | Passes to run. `all` = every registered pass **except** `to-dll` |
-| `--emit-binary` | Compile rewritten source (`--binary-target`) |
-| `--emit-dll` | Compile to a Windows DLL (implies emit-binary) |
-| `--binary-target=id` | See `--list-targets` (`host`, `mingw-x64`, `mingw-dll`, `clang-cl-dll`, …) |
-| `--binary-output=path` | Binary/DLL path (default: `<obf_stem>` / `.exe` / `.dll`) |
-| `--seed=N` | Seed for crypto, MBA, flatten, dict, junk, … |
-| `--clang-flags="…"` | Extra flags for rewrite parse **and** final compile |
-| `--` | Clang parse flags for the rewriter (merged with `--clang-flags`) |
-| `-v` / `--verbose` | Debug logging |
-| `--log-file=PATH` | Append logs to a file (`FEV_LOG_FILE` also works) |
-| `--validate=off\|warn\|strict` | Pass integrity checks (default `warn`; or `FEV_VALIDATE`) |
-| `--list-passes` / `--list-targets` | Catalog and exit |
-| `--no-banner` | Skip splash |
-
-### `to-dll` knobs
-
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `--dll-entry=ident` | `_fev_dll_entry` | Renamed former `main` |
-| `--dll-export` | on | `__declspec(dllexport)` the entry |
-| `--dll-thread` | on | Run entry via `CreateThread` from `DllMain` (avoids loader lock) |
-
-`--emit-dll` defaults to `clang-cl-dll` on Windows and `mingw-dll` elsewhere. Override with `--binary-target=…`.
+| `--config=path` | Load JSON recipe |
+| `-o` / `--outdir` | Output file / directory |
+| `--passes=a,b` | Pass list (`all` excludes opt-in `to-dll`) |
+| `--emit-binary` / `--emit-dll` | Link EXE or DLL (overrides config `emit`) |
+| `--binary-target=id` | Compile target override |
+| `--seed=N` | Crypto / MBA / flatten / dict seed |
+| `--clang-flags="…"` | Rewriter + link flags |
+| `--` | Extra rewriter parse flags |
+| `-v`, `--log-file`, `--validate` | Logging / integrity |
 
 ---
 
 ## Passes
 
-Multi-pass runs **re-parse between steps** so later AST passes see text from earlier ones.
+Multi-pass runs **re-parse between steps**.
 
 | Pass | Role |
 | --- | --- |
-| `encrypt-strings` | ChaCha20-encrypt call-site string literals; lazy decrypt + FNV |
-| `encrypt-buffers` | ChaCha20-encrypt global/static byte arrays; decrypt at `main` |
-| `encode-constants` | Integer literals → `(enc ^ key)` ICE forms |
-| `scramble-arrays` | Fisher–Yates + XOR on byte arrays; restore at `main` |
-| `array-split` | Split large byte arrays into chunks; join at `main` |
-| `dict-bytes` | Encode byte arrays via seeded two-word slot table |
-| `dict-rename` | Rename fns/vars/types/fields to two-word dictionary idents (last in `all`) |
-| `flatten-cfg` | László-style control-flow flattening |
-| `mba-substitute` | Leaf `+ - ^ \| &` → MBA identities |
-| `opaque-predicates` | Anti-DSE bogus control flow |
-| `junk-code` | Inert Windows-API junk blocks |
-| `winapi-hash` | Windows API → DJB2 PEB/export resolution |
-| `sandbox-sleep` | Wall-clock sleep timing check at `main` |
-| `wrap-functions` | Extra call frame around `static` functions |
-| `annotate` | Debug marker comments before function defs |
-| `xor-strings` | Legacy single-byte XOR strings |
-| `to-dll` | **Opt-in only** — `main` → export entry + `DllMain` |
+| `encrypt-strings` | ChaCha20 call-site strings |
+| `encrypt-buffers` | ChaCha20 global/static byte arrays |
+| `encode-constants` | Integer literals → `(enc ^ key)` |
+| `scramble-arrays` | Fisher–Yates + XOR on byte arrays |
+| `array-split` | Split large byte arrays |
+| `dict-bytes` | Two-word slot encoding of byte arrays |
+| `dict-rename` | Two-word dictionary rename (last in `all`) |
+| `flatten-cfg` | László-style CFF |
+| `mba-substitute` | Leaf arithmetic → MBA |
+| `opaque-predicates` | Anti-DSE bogus CF |
+| `junk-code` | Windows-API junk blocks |
+| `winapi-hash` | Hashed PEB/export resolution |
+| `sandbox-sleep` | Anti-sandbox sleep check at `main` |
+| `wrap-functions` | Extra frame on `static` fns |
+| `annotate` | Debug markers |
+| `xor-strings` | Legacy XOR strings |
+| `to-dll` | **Opt-in** — `main` → export + `DllMain` |
 
-### Ordering notes
-
-- In `--passes=all`: buffer order is **scramble-arrays → encrypt-buffers → dict-bytes → array-split** (ChaCha before dict encoding); `dict-rename` is forced last; **`to-dll` is never included**.
-- Passes that inject at `main` (`encrypt-buffers`, `sandbox-sleep`, array restore, …) must run **before** `to-dll`.
-- Typical DLL pipeline: obfuscate first, then convert:
-
-```bash
-./build/fev --passes=encrypt-buffers,scramble-arrays,to-dll --emit-dll \
-  examples/sample2.c --
-```
+In `--passes=all`: **scramble → encrypt-buffers → dict-bytes → array-split**; `dict-rename` last; `to-dll` never included (use `configs/win-dll.json` or `all,to-dll`).
 
 ---
 
@@ -155,76 +149,31 @@ Multi-pass runs **re-parse between steps** so later AST passes see text from ear
 
 ```text
 CUSTOM/FEV/
-├── CMakeLists.txt          # globs src/passes/*.cpp automatically
+├── configs/           # win-exe.json, win-dll.json, host-smoke.json
+├── CMakeLists.txt
 ├── Makefile
-├── cmake/                  # pass-name discovery → GeneratedPassNames.h
-├── dicts/                  # optional name dictionaries
-├── examples/
 ├── include/fev/
 └── src/
+    ├── Config.cpp     # JSON recipe loader
     ├── main.cpp
-    ├── Compiler.cpp
-    ├── PassRegistry.cpp
-    ├── TargetSupport.cpp
-    ├── support/
-    └── passes/             # one .cpp per pass; FEV_REGISTER_PASS
+    └── passes/
 ```
 
 ---
 
 ## Writing a pass
 
-Passes self-register. Drop a file under `src/passes/` — CMake globs it; no central switch.
+Drop `src/passes/YourPass.cpp` with `FEV_REGISTER_PASS` — CMake globs it.
 
-```cpp
-#include "fev/Pass.h"
-#include "clang/ASTMatchers/ASTMatchFinder.h"
-#include "clang/ASTMatchers/ASTMatchers.h"
-
-using namespace clang;
-using namespace clang::ast_matchers;
-
-namespace {
-
-class YourPass final : public fev::Pass {
-public:
-  llvm::StringRef name() const override { return "your-pass"; }
-  llvm::StringRef description() const override {
-    return "Shown by --list-passes";
-  }
-  bool run(fev::PassContext &Ctx) override {
-    // Match AST nodes; edit with Ctx.Rewriter; return false on hard failure.
-    return true;
-  }
-};
-
-FEV_REGISTER_PASS(YourPass);
-
-} // namespace
-```
-
-| Field | Use |
-| --- | --- |
-| `Ctx.AST` | Types, parents, diagnostics |
-| `Ctx.Rewriter` | `InsertText` / `ReplaceText` / `RemoveText` on the main file |
-| `Ctx.Config` | Shared knobs (`Seed`, densities, dll options, …) |
-
-Add knobs to `fev::PassConfig` in `include/fev/Pass.h` and wire CLI flags in `src/main.cpp`.
-
-Tips:
-
-- Prefer ASTMatchers; use a visitor when you need full-tree state.
-- Restrict edits to the main file; keep replacements token-accurate.
-- Avoid overlapping rewrites on the same location.
-- Round-trip: rewrite → compile → run.
+Add knobs to `fev::PassConfig` / JSON keys in `Config.cpp` / CLI in `main.cpp` as needed.
 
 ---
 
 ## Smoke tests
 
 ```bash
-make test              # sample.c encrypt + host binary
-make test-sample2      # sample2.c MinGW PE
-make test-cff          # flatten-cfg
-make test-opaque       # opaque-predicates
+make test
+make test-sample2
+make test-cff
+make test-opaque
 ```

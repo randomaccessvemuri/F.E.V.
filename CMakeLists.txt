@@ -36,6 +36,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DiscoverPasses.cmake")
 set(FEV_SOURCES
   src/main.cpp
   src/Compiler.cpp
+  src/Config.cpp
   src/PassRegistry.cpp
   src/TargetSupport.cpp
   src/support/ChaCha20.cpp

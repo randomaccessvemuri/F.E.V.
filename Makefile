@@ -24,6 +24,7 @@ CMAKE     ?= cmake
 FEV       := $(BUILD_DIR)/fev
 
 FILE        ?=
+CONFIG      ?=
 PASSES      ?= all
 SEED        ?= 0xC0FFEE
 OUT         ?=
@@ -112,14 +113,17 @@ help:
 	@echo "  Made by @tmajik"
 	@echo ""
 	@echo "  make                         build fev"
+	@echo "  make FILE=<src> CONFIG=configs/win-exe.json"
+	@echo "  make FILE=<src> CONFIG=configs/win-dll.json"
 	@echo "  make FILE=<src>              apply PASSES (default PASSES=all, SUFFIX=_obf)"
 	@echo "  make FILE=<src> BINARY=1     also compile output"
 	@echo "  make FILE=<src> PASSES=none  copy original → <stem>_orig.<ext>"
 	@echo "  make list / list-targets / clean"
 	@echo ""
-	@echo "Knobs: FILE PASSES SEED SUFFIX OUT OUTDIR BINARY TARGET BINARY_OUT"
+	@echo "Knobs: FILE CONFIG PASSES SEED SUFFIX OUT OUTDIR BINARY TARGET BINARY_OUT"
 	@echo "       CLANG_FLAGS FEV_FLAGS SEQUENTIAL LOG_FILE VALIDATE"
 	@echo ""
+	@echo "  CONFIG=path  → fev --config (preferred for EXE/DLL recipes)"
 	@echo "  PASSES=all   → sequential pipeline of every pass"
 	@echo "  PASSES=none  → no obfuscation (baseline copy for comparison)"
 	@echo "  PASSES=a,b   → one fev invocation (SEQUENTIAL=1 to pipeline)"
@@ -127,6 +131,8 @@ help:
 	@echo "  OUTDIR=dir   → write outputs under dir (created if missing)"
 	@echo ""
 	@echo "Examples:"
+	@echo "  make FILE=examples/sample2.c CONFIG=configs/win-exe.json"
+	@echo "  make FILE=examples/sample2.c CONFIG=configs/win-dll.json"
 	@echo "  make FILE=examples/sample.c BINARY=1"
 	@echo "  make FILE=examples/sample.c PASSES=none BINARY=1"
 	@echo "  make FILE=examples/sample.c PASSES=all SUFFIX=_obf BINARY=1"
@@ -136,8 +142,8 @@ help:
 	@echo "  make FILE=examples/sample2.c PASSES=all,to-dll BINARY=1 TARGET=mingw-dll OUTDIR=examples/out"
 	@echo ""
 	@echo "Smoke: make test | test-sample2 | test-cff | test-opaque"
-	@echo "Note: to-dll is opt-in (not in PASSES=all). TARGET=clang-cl-dll needs MSVC SDK;"
-	@echo "      on Linux use TARGET=mingw-dll for --emit-dll-style builds."
+	@echo "Note: to-dll is opt-in (not in PASSES=all). Prefer CONFIG=configs/win-*.json."
+	@echo "      TARGET=clang-cl-dll needs MSVC SDK; on Linux use mingw-dll."
 
 configure: $(BUILD_DIR)/CMakeCache.txt
 
@@ -177,6 +183,12 @@ run obfuscate: $(FEV)
 	  if [ -z "$$EFF_CLANG" ]; then \
 	    EFF_CLANG="$(MINGW_FLAGS)"; \
 	  fi; \
+	fi; \
+	if [ -n "$(CONFIG)" ]; then \
+	  echo "config: $(CONFIG)"; \
+	  $(FEV) --no-banner --config="$(CONFIG)" $(FEV_LOG_ARGS) $(FEV_FLAGS) \
+	    "$(FILE)" -- $$EFF_CLANG; \
+	  exit 0; \
 	fi; \
 	case "$$EFF_TARGET" in \
 	  mingw-dll|clang-cl-dll) \

@@ -1,0 +1,10 @@
+{
+  "description": "Full obfuscation → Windows console PE (.exe)",
+  "passes": "all",
+  "seed": "0xC0FFEE",
+  "outdir": "examples/out",
+  "emit": "exe",
+  "target": "mingw-x64",
+  "validate": "warn",
+  "clang_flags": "--target=x86_64-w64-mingw32 -isystem /usr/x86_64-w64-mingw32/include"
+}

@@ -1,0 +1,10 @@
+{
+  "description": "Full obfuscation + to-dll → Windows DLL",
+  "passes": "all,to-dll",
+  "seed": "0xC0FFEE",
+  "outdir": "examples/out",
+  "emit": "dll",
+  "target": "mingw-dll",
+  "validate": "warn",
+  "clang_flags": "--target=x86_64-w64-mingw32 -isystem /usr/x86_64-w64-mingw32/include"
+}
