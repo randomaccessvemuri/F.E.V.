@@ -141,7 +141,8 @@ help:
 	@echo "  make FILE=examples/sample2.c PASSES=to-dll BINARY=1 TARGET=mingw-dll SUFFIX=_dll"
 	@echo "  make FILE=examples/sample2.c PASSES=all,to-dll BINARY=1 TARGET=mingw-dll OUTDIR=examples/out"
 	@echo ""
-	@echo "Smoke: make test | test-buffers | check | test-sample2 | test-cff | test-opaque"
+	@echo "Smoke: make test | test-buffers | test-mba | test-cff | test-opaque |"
+	@echo "             test-sample2 | test-dll | check"
 	@echo "Note: to-dll is opt-in (not in PASSES=all). Prefer CONFIG=configs/win-*.json."
 	@echo "      TARGET=clang-cl-dll needs MSVC SDK; on Linux use mingw-dll."
 	@echo "      configs/test-buffers.json enables interpass_validate (run via make test-buffers / check)."
@@ -358,7 +359,21 @@ test-buffers: $(FEV)
 	  || (echo "FAIL: buffer probe output" >&2; exit 1)
 	@! grep -qE '0x10, 0x32, 0x54, 0x76' tests/out/buffers_obf.c \
 	  || (echo "FAIL: cleartext buf_alpha still present" >&2; exit 1)
+	@grep -q 'Rebuild the same Fisher' tests/out/buffers_obf.c \
+	  || (echo "FAIL: scramble restore helper missing after pipeline" >&2; exit 1)
+	@! grep -qE '_fev_(ct_|sc_|ensure_|unscramble_|xs64)\b' tests/out/buffers_obf.c \
+	  || (echo "FAIL: dict-rename left _fev_* buffer symbols" >&2; exit 1)
 	@echo "PASS: interpass buffer integrity (configs/test-buffers.json)"
+
+test-mba: $(FEV)
+	@mkdir -p tests/out
+	$(FEV) --no-banner --config configs/test-mba.json tests/fixtures/mba.c
+	@test -f tests/out/mba_obf.c && test -f tests/out/mba_obf
+	@grep -q '_fev_sw' tests/out/mba_obf.c
+	@OUT=$$(tests/out/mba_obf); echo "$$OUT"; \
+	  echo "$$OUT" | grep -qx 'mba demo: 34' \
+	  || (echo "FAIL: unexpected mba output" >&2; exit 1)
+	@echo "PASS: mba+flatten oracle (configs/test-mba.json)"
 
 test-sample2: $(FEV)
 	$(MAKE) --no-print-directory FILE=examples/sample2.c \
@@ -373,6 +388,21 @@ test-sample2: $(FEV)
 	@file examples/sample2_obf.exe | grep -qi 'PE32+' \
 	  || (echo "FAIL: expected PE32+ binary" >&2; file examples/sample2_obf.exe; exit 1)
 	@echo "PASS: examples/sample2_obf.c + examples/sample2_obf.exe"
+
+test-dll: $(FEV)
+	@mkdir -p tests/out
+	$(FEV) --no-banner --config configs/test-dll.json \
+		tests/fixtures/dll_smoke.c
+	@test -f tests/out/dll_smoke_obf.c && test -f tests/out/dll_smoke_obf.dll
+	@grep -q 'DllMain' tests/out/dll_smoke_obf.c \
+	  || (echo "FAIL: DllMain missing" >&2; exit 1)
+	@grep -qE '_fev_dll_entry|__declspec\(dllexport\)' tests/out/dll_smoke_obf.c \
+	  || (echo "FAIL: dll entry/export missing" >&2; exit 1)
+	@! grep -qE '^int main\(|^int main \(|^void main\(' tests/out/dll_smoke_obf.c \
+	  || (echo "FAIL: main() still present after to-dll" >&2; exit 1)
+	@file tests/out/dll_smoke_obf.dll | grep -qi 'DLL' \
+	  || (echo "FAIL: expected DLL PE" >&2; file tests/out/dll_smoke_obf.dll; exit 1)
+	@echo "PASS: to-dll MinGW smoke (configs/test-dll.json)"
 
 test-cff: $(FEV)
 	$(MAKE) --no-print-directory FILE=examples/sample_cff.c \
@@ -399,14 +429,15 @@ test-opaque: $(FEV)
 	@echo "PASS: examples/sample_opaque_obf.c + examples/sample_opaque_obf"
 
 ## Full developer check — run after modifying passes / buffer pipeline.
-check: test test-buffers test-cff test-opaque
+## `test` already includes test-buffers.
+check: test test-cff test-opaque test-mba test-sample2 test-dll
 	@echo "PASS: make check"
 
-## Default `test` also exercises inter-pass buffers (safety net on every smoke).
+## Alias
 test-all: check
 
 .PHONY: help configure build list list-targets run obfuscate test test-buffers \
-	test-sample2 test-cff test-opaque check test-all clean
+	test-mba test-sample2 test-dll test-cff test-opaque check test-all clean
 
 clean:
 	rm -rf $(BUILD_DIR) out tests/out

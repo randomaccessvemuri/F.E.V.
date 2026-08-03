@@ -1,0 +1,12 @@
+{
+  "description": "Thin to-dll MinGW compile smoke (no full pass pipeline / no sandbox sleep)",
+  "passes": "encrypt-buffers,to-dll",
+  "seed": "0xC0FFEE",
+  "outdir": "tests/out",
+  "emit": "dll",
+  "target": "mingw-dll",
+  "validate": "warn",
+  "dll_export": true,
+  "dll_thread": true,
+  "clang_flags": "--target=x86_64-w64-mingw32 -isystem /usr/x86_64-w64-mingw32/include"
+}

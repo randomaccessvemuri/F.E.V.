@@ -1,8 +1,10 @@
 {
-  "description": "Developer safety net: scramble→encrypt→flatten→… with inter-pass buffer restore checks + host execute after each step",
+  "description": "Developer safety net: scramble→encrypt→dict-bytes→array-split→… with inter-pass buffer restore + host execute",
   "passes": [
     "scramble-arrays",
     "encrypt-buffers",
+    "dict-bytes",
+    "array-split",
     "encode-constants",
     "flatten-cfg",
     "mba-substitute",
@@ -16,5 +18,6 @@
   "validate": "strict",
   "interpass_validate": true,
   "opaque_density": 0.5,
-  "mba_density": 0.5
+  "mba_density": 0.5,
+  "array_chunk": 16
 }

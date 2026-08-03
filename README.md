@@ -194,8 +194,12 @@ Add knobs to `fev::PassConfig` / JSON keys in `Config.cpp` / CLI in `main.cpp` a
 ## Smoke tests
 
 ```bash
-make test
-make test-sample2
+make test          # host encrypt smoke + interpass buffers
+make test-buffers  # configs/test-buffers.json (scramble→…→dict-rename)
+make test-mba      # MBA + flatten arithmetic oracle
 make test-cff
 make test-opaque
+make test-sample2  # MinGW PE smoke
+make test-dll      # to-dll MinGW DLL smoke
+make check         # all of the above
 ```

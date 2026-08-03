@@ -72,3 +72,33 @@ add_test(
           ${CMAKE_MAKE_PROGRAM} -C ${CMAKE_SOURCE_DIR} test-buffers
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
+add_test(
+  NAME test-mba
+  COMMAND ${CMAKE_COMMAND} -E env
+          ${CMAKE_MAKE_PROGRAM} -C ${CMAKE_SOURCE_DIR} test-mba
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+add_test(
+  NAME test-cff
+  COMMAND ${CMAKE_COMMAND} -E env
+          ${CMAKE_MAKE_PROGRAM} -C ${CMAKE_SOURCE_DIR} test-cff
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+add_test(
+  NAME test-opaque
+  COMMAND ${CMAKE_COMMAND} -E env
+          ${CMAKE_MAKE_PROGRAM} -C ${CMAKE_SOURCE_DIR} test-opaque
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+add_test(
+  NAME test-sample2
+  COMMAND ${CMAKE_COMMAND} -E env
+          ${CMAKE_MAKE_PROGRAM} -C ${CMAKE_SOURCE_DIR} test-sample2
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+add_test(
+  NAME test-dll
+  COMMAND ${CMAKE_COMMAND} -E env
+          ${CMAKE_MAKE_PROGRAM} -C ${CMAKE_SOURCE_DIR} test-dll
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)

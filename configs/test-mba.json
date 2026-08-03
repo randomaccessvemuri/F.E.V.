@@ -1,0 +1,10 @@
+{
+  "description": "Host MBA + flatten arithmetic oracle",
+  "passes": ["mba-substitute", "flatten-cfg"],
+  "seed": "0xC0FFEE",
+  "outdir": "tests/out",
+  "emit": "exe",
+  "target": "host",
+  "validate": "strict",
+  "mba_density": 1.0
+}
