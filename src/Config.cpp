@@ -310,6 +310,13 @@ std::optional<FileConfig> loadConfigFile(llvm::StringRef Path) {
         logWarn() << "config: 'validate' must be a string";
       continue;
     }
+    if (Key == "interpass_validate" || Key == "interpass-validate") {
+      if (auto V = parseBoolValue(Val))
+        Cfg.InterpassValidate = *V;
+      else
+        logWarn() << "config: invalid 'interpass_validate'";
+      continue;
+    }
     if (Key == "output" || Key == "o") {
       if (auto S = asString(Val))
         Cfg.Output = *S;

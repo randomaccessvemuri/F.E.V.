@@ -1,5 +1,6 @@
 #include "fev/Compiler.h"
 #include "fev/Config.h"
+#include "fev/InterpassValidate.h"
 #include "fev/Log.h"
 #include "fev/Pass.h"
 #include "fev/TargetSupport.h"
@@ -206,6 +207,14 @@ static cl::opt<std::string> ValidateOpt(
              "Also: FEV_VALIDATE"),
     cl::value_desc("mode"), cl::init("warn"), cl::cat(FevCategory));
 
+static cl::opt<bool> InterpassValidateOpt(
+    "interpass-validate",
+    cl::desc(
+        "After each multi-pass step, verify original byte buffers still restore "
+        "(crypto round-trip + scramble helper not CFF'd). Host TUs also "
+        "compile+run. Config: interpass_validate. Developer safety net."),
+    cl::init(false), cl::cat(FevCategory));
+
 static cl::extrahelp CommonHelp(CommonOptionsParser::HelpMessage);
 static cl::extrahelp MoreHelp(R"(
   █████▒     ▓█████       ██▒   █▓
@@ -241,6 +250,8 @@ Flags after '--' are also rewriter parse flags (merged).
 
 Logging: debug (-v), info, warn, error. --log-file / FEV_LOG_FILE.
 Validation: --validate=warn|strict|off (default warn; FEV_VALIDATE).
+Inter-pass buffers: --interpass-validate / config interpass_validate
+  (crypto restore + helper CFF check after each step; host TUs also run).
 )");
 
 static bool hasFlag(int argc, const char **argv, StringRef Flag) {
@@ -576,6 +587,10 @@ int main(int argc, const char **argv) {
     Config.Validate = fev::parseValidateMode(Mode);
   }
 
+  Config.InterpassValidate = InterpassValidateOpt;
+  if (cliUnset(InterpassValidateOpt) && FileCfg && FileCfg->InterpassValidate)
+    Config.InterpassValidate = *FileCfg->InterpassValidate;
+
   // Re-validate ranges after config merge.
   if (Config.MbaDensity < 0.0 || Config.MbaDensity > 1.0 ||
       Config.OpaqueDensity < 0.0 || Config.OpaqueDensity > 1.0 ||
@@ -677,9 +692,32 @@ int main(int argc, const char **argv) {
     return StepTool.run(&Factory);
   };
 
+  std::vector<fev::GoldenBuffer> Goldens;
+  if (Config.InterpassValidate) {
+    fev::logInfo() << "interpass-validate: harvesting golden buffers from "
+                   << Sources.front();
+    if (!fev::harvestGoldenBuffers(Sources.front(), Goldens))
+      return 1;
+    if (Goldens.empty())
+      fev::logWarn() << "interpass-validate: no buffers to track "
+                        "(need ≥8-byte char arrays)";
+  }
+
+  // Host execute probe only when linking for host (or source-only host smoke).
+  const bool InterpassExecute =
+      Config.InterpassValidate &&
+      (EffectiveTarget == "host" || EffectiveTarget.empty());
+
   int RewriteRC = 0;
   if (Pipeline.size() == 1) {
-    RewriteRC = runOne(std::move(Config), Sources.front(), OutFile);
+    fev::PassConfig Single = Config;
+    RewriteRC = runOne(std::move(Single), Sources.front(), OutFile);
+    if (RewriteRC == 0 && Config.InterpassValidate && !Goldens.empty()) {
+      if (!fev::interpassValidateAfterPass(
+              OutFile, Pipeline[0]->name(), Goldens, Config.Seed,
+              Config.Validate, InterpassExecute, /*AlwaysFail=*/true))
+        return 1;
+    }
   } else {
     fev::logInfo() << "multi-pass: re-parsing between " << Pipeline.size()
                    << " passes";
@@ -694,6 +732,7 @@ int main(int argc, const char **argv) {
       return 1;
     std::string CurrentIn = Sources.front();
     bool UseA = true;
+    bool KeepTemps = false;
     for (size_t I = 0; I < Pipeline.size(); ++I) {
       const bool Last = (I + 1 == Pipeline.size());
       const std::string StepOut = Last ? OutFile : (UseA ? TmpA : TmpB);
@@ -712,11 +751,25 @@ int main(int argc, const char **argv) {
         RewriteRC = 1;
         break;
       }
+      if (Config.InterpassValidate && !Goldens.empty()) {
+        if (!fev::interpassValidateAfterPass(
+                StepOut, Pipeline[I]->name(), Goldens, Config.Seed,
+                Config.Validate, InterpassExecute, /*AlwaysFail=*/true)) {
+          fev::logError() << "interpass-validate stopped after '"
+                          << Pipeline[I]->name() << "'; keeping "
+                          << StepOut << " for debugging";
+          KeepTemps = true;
+          RewriteRC = 1;
+          break;
+        }
+      }
       CurrentIn = StepOut;
       UseA = !UseA;
     }
-    llvm::sys::fs::remove(TmpA);
-    llvm::sys::fs::remove(TmpB);
+    if (!KeepTemps) {
+      llvm::sys::fs::remove(TmpA);
+      llvm::sys::fs::remove(TmpB);
+    }
   }
 
   if (RewriteRC != 0) {

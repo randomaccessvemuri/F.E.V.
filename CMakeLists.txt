@@ -37,6 +37,7 @@ set(FEV_SOURCES
   src/main.cpp
   src/Compiler.cpp
   src/Config.cpp
+  src/InterpassValidate.cpp
   src/PassRegistry.cpp
   src/TargetSupport.cpp
   src/support/ChaCha20.cpp
@@ -63,3 +64,11 @@ target_link_options(fev PRIVATE -Wl,--no-as-needed)
 target_link_libraries(fev PRIVATE clang-cpp LLVM)
 
 install(TARGETS fev RUNTIME DESTINATION bin)
+
+enable_testing()
+add_test(
+  NAME interpass-buffers
+  COMMAND ${CMAKE_COMMAND} -E env
+          ${CMAKE_MAKE_PROGRAM} -C ${CMAKE_SOURCE_DIR} test-buffers
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)

@@ -141,9 +141,10 @@ help:
 	@echo "  make FILE=examples/sample2.c PASSES=to-dll BINARY=1 TARGET=mingw-dll SUFFIX=_dll"
 	@echo "  make FILE=examples/sample2.c PASSES=all,to-dll BINARY=1 TARGET=mingw-dll OUTDIR=examples/out"
 	@echo ""
-	@echo "Smoke: make test | test-sample2 | test-cff | test-opaque"
+	@echo "Smoke: make test | test-buffers | check | test-sample2 | test-cff | test-opaque"
 	@echo "Note: to-dll is opt-in (not in PASSES=all). Prefer CONFIG=configs/win-*.json."
 	@echo "      TARGET=clang-cl-dll needs MSVC SDK; on Linux use mingw-dll."
+	@echo "      configs/test-buffers.json enables interpass_validate (run via make test-buffers / check)."
 
 configure: $(BUILD_DIR)/CMakeCache.txt
 
@@ -331,7 +332,8 @@ run obfuscate: $(FEV)
 	fi; \
 	echo "wrote $(OUT)" $$( [ "$$WANT_BIN" = "1" ] && echo "+ $$EFF_BINOUT" )
 
-# --- smoke tests ----------------------------------------------------------
+# --- smoke / regression tests --------------------------------------------
+# Prefer: make check   (runs all safety nets including inter-pass buffers)
 
 test: $(FEV)
 	$(MAKE) --no-print-directory FILE=examples/sample.c \
@@ -343,6 +345,20 @@ test: $(FEV)
 	@! grep -F 'hello from fev' examples/sample_obf.c >/dev/null \
 	  || (echo "FAIL: cleartext format string still present" >&2; exit 1)
 	@echo "PASS: examples/sample_obf.c + examples/sample_obf"
+	@$(MAKE) --no-print-directory test-buffers
+
+## Inter-pass buffer integrity (config-driven). Also pulled in by `make test`.
+test-buffers: $(FEV)
+	@mkdir -p tests/out
+	$(FEV) --no-banner --config configs/test-buffers.json \
+		tests/fixtures/buffers.c
+	@test -f tests/out/buffers_obf.c && test -f tests/out/buffers_obf
+	@OUT=$$(tests/out/buffers_obf); echo "$$OUT"; \
+	  echo "$$OUT" | grep -q 'buffers ok' \
+	  || (echo "FAIL: buffer probe output" >&2; exit 1)
+	@! grep -qE '0x10, 0x32, 0x54, 0x76' tests/out/buffers_obf.c \
+	  || (echo "FAIL: cleartext buf_alpha still present" >&2; exit 1)
+	@echo "PASS: interpass buffer integrity (configs/test-buffers.json)"
 
 test-sample2: $(FEV)
 	$(MAKE) --no-print-directory FILE=examples/sample2.c \
@@ -382,7 +398,18 @@ test-opaque: $(FEV)
 	  || (echo "FAIL: unexpected program output" >&2; exit 1)
 	@echo "PASS: examples/sample_opaque_obf.c + examples/sample_opaque_obf"
 
+## Full developer check — run after modifying passes / buffer pipeline.
+check: test test-buffers test-cff test-opaque
+	@echo "PASS: make check"
+
+## Default `test` also exercises inter-pass buffers (safety net on every smoke).
+test-all: check
+
+.PHONY: help configure build list list-targets run obfuscate test test-buffers \
+	test-sample2 test-cff test-opaque check test-all clean
+
 clean:
-	rm -rf $(BUILD_DIR) out
+	rm -rf $(BUILD_DIR) out tests/out
 	rm -f examples/*_obf.c examples/*_obf.h examples/*_obf examples/*_obf.exe
 	rm -f examples/*_orig.c examples/*_orig.h examples/*_orig examples/*_orig.exe
+	rm -f examples/out/* 2>/dev/null || true

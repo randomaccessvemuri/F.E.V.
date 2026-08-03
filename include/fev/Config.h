@@ -42,6 +42,7 @@ struct FileConfig {
   std::optional<bool> DllExport;
   std::optional<bool> DllThread;
   std::optional<std::string> Validate; ///< off|warn|strict
+  std::optional<bool> InterpassValidate;
 
   std::optional<std::string> Output;      ///< -o
   std::optional<std::string> OutDir;      ///< --outdir

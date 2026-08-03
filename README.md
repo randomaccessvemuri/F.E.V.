@@ -92,6 +92,7 @@ JSON object. Unknown keys are warned and ignored.
 | `outdir` / `output` | Output directory / file (`-o`) |
 | `binary_output` | Linked binary path |
 | `seed`, `validate`, `clang_flags` | Same as CLI |
+| `interpass_validate` | After each multi-pass step, verify buffers still restore (and host TUs compile+run). Developer safety net. |
 | `dll_entry`, `dll_export`, `dll_thread` | `to-dll` knobs |
 | densities / sleep / array_* | Matching CLI names (`mba_density` or `mba-density`) |
 
@@ -114,9 +115,30 @@ JSON object. Unknown keys are warned and ignored.
 | `--clang-flags="…"` | Rewriter + link flags |
 | `--` | Extra rewriter parse flags |
 | `-v`, `--log-file`, `--validate` | Logging / integrity |
+| `--interpass-validate` | After each pass step, check buffer restore (see below) |
+
+### Inter-pass buffer checks
+
+When developing buffer-touching passes, enable:
+
+```bash
+# Config (preferred)
+./build/fev --config configs/test-buffers.json tests/fixtures/buffers.c
+
+# Or CLI
+./build/fev --passes=scramble-arrays,encrypt-buffers,flatten-cfg \
+  --interpass-validate --validate=strict --emit-binary --binary-target=host \
+  tests/fixtures/buffers.c --
+```
+
+After **each** pipeline step FEV:
+1. Confirms scramble restore helpers were not control-flow-flattened
+2. Re-simulates ChaCha/scramble decode against the golden payloads from the input
+3. On host TUs, compiles and runs the step output (injected ensures + fixture checks)
+
+Failures keep the step file for debugging. Run the suite with `make test-buffers` or `make check`.
 
 ---
-
 ## Passes
 
 Multi-pass runs **re-parse between steps**.

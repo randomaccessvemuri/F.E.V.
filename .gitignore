@@ -12,6 +12,8 @@ compile_commands.json
 *_dll.cpp
 *.fev_step_*.c
 *.fev_step_*.cpp
+*.fev_probe
+tests/out/
 *.exe
 *.dll
 *.o

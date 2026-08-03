@@ -71,6 +71,11 @@ struct PassConfig {
   /// Rewrite-time (+ optional runtime) integrity checks for each pass.
   /// Off = none, Warn = log and continue, Strict = fail the pass on mismatch.
   ValidateMode Validate = ValidateMode::Warn;
+
+  /// After each multi-pass step, verify buffer restore still recovers the
+  /// original payloads (and that scramble helpers were not CFF'd). Intended as
+  /// a developer safety net; enable via --interpass-validate / config.
+  bool InterpassValidate = false;
 };
 
 struct PassContext {

@@ -1,0 +1,20 @@
+{
+  "description": "Developer safety net: scramble→encrypt→flatten→… with inter-pass buffer restore checks + host execute after each step",
+  "passes": [
+    "scramble-arrays",
+    "encrypt-buffers",
+    "encode-constants",
+    "flatten-cfg",
+    "mba-substitute",
+    "opaque-predicates",
+    "dict-rename"
+  ],
+  "seed": "0xC0FFEE",
+  "outdir": "tests/out",
+  "emit": "exe",
+  "target": "host",
+  "validate": "strict",
+  "interpass_validate": true,
+  "opaque_density": 0.5,
+  "mba_density": 0.5
+}
