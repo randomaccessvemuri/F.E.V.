@@ -13,7 +13,7 @@
 
 # FEV
 
-Source-to-source C/C++ obfuscator built on **ClangTooling**.
+Source-to-source C/C++ obfuscator built on **ClangTooling**. Named after the Forced Evolutionary Virus from Fallout lore.
 
 FEV parses a translation unit, runs a pipeline of registered passes against the AST, and emits rewritten source via `clang::Rewriter`. Optionally compiles the result to a host binary, MinGW PE, or Windows DLL.
 
