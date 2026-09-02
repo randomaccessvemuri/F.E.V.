@@ -17,7 +17,7 @@ Source-to-source C/C++ obfuscator built on **ClangTooling**.
 
 FEV parses a translation unit, runs a pipeline of registered passes against the AST, and emits rewritten source via `clang::Rewriter`. Optionally compiles the result to a host binary, MinGW PE, or Windows DLL.
 
-Made by [@tmajik]([https://github.com/tmajik](https://www.linkedin.com/in/tanmay-vemuri-213ba8256/)).
+Made by [@tmajik](https://www.linkedin.com/in/tanmay-vemuri-213ba8256/).
 
 ---
 
